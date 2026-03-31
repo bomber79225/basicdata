@@ -1,748 +1,769 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInAnonymously, 
-  onAuthStateChanged, 
-  signInWithCustomToken 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  addDoc, 
-  onSnapshot,
-  query,
-  doc
-} from 'firebase/firestore';
-import { 
-  User, 
-  CreditCard, 
-  DollarSign, 
-  Users, 
-  ChevronRight, 
-  ChevronLeft, 
-  CheckCircle, 
-  ShieldCheck, 
-  Info, 
-  Database, 
-  ArrowRightLeft, 
-  MapPin, 
-  Home, 
-  Lock,
-  Download,
-  FileSpreadsheet
-} from 'lucide-react';
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>專屬保單資料填寫系統</title>
+  
+  <!-- 引入 Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 引入 Babel 來讓瀏覽器看得懂 JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <style>
+    /* 隱藏捲軸但保留滾動功能 (讓手機介面更像 App) */
+    ::-webkit-scrollbar { width: 0px; background: transparent; }
+    body { -webkit-tap-highlight-color: transparent; }
+  </style>
+</head>
+<body class="bg-[#F4F6F8]">
+  <div id="root"></div>
 
-/**
- * --- 安全性與環境變數說明 ---
- * 在標準環境中，請將以下資訊替換為您的 Firebase 專案配置。
- * 如果是在特殊 Sandbox 環境，系統會自動注入這些變數。
- */
-const firebaseConfig = typeof __firebase_config !== 'undefined' 
-  ? JSON.parse(__firebase_config) 
-  : {
-      apiKey: "",
-      authDomain: "",
-      projectId: "",
-      storageBucket: "",
-      messagingSenderId: "",
-      appId: ""
-    };
+  <!-- 使用 type="text/babel" 搭配 data-type="module" 來使用 ESM 模組引入 React -->
+  <script type="text/babel" data-type="module">
+    // 鎖定 React 版本為 18.3.1
+    import React, { useState, useRef, useEffect } from 'https://esm.sh/react@18.3.1';
+    import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
+    // 強制 lucide-react 使用與上述相同的 react@18.3.1 依賴
+    import { User, FileText, DollarSign, Users, CreditCard, CheckCircle, AlertCircle, ChevronRight, ChevronLeft, Plus, Trash2, Gift, Send } from 'https://esm.sh/lucide-react@0.378.0?deps=react@18.3.1';
 
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'insurance-form-app';
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxDWZQen5xtW0IbTb7B_QJRi96Ho-6fJPPln2M2snQhgTV33b2k0pOEizMV7q-xGW5i/exec"; 
+    const App = () => {
+      // 您的 GAS 網址
+      const scriptUrl = "https://script.google.com/macros/s/AKfycbxDWZQen5xtW0IbTb7B_QJRi96Ho-6fJPPln2M2snQhgTV33b2k0pOEizMV7q-xGW5i/exec";
 
-// 初始化 Firebase (放在元件外，確保只執行一次)
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+      const [isSubmitting, setIsSubmitting] = useState(false);
+      const [submitStatus, setSubmitStatus] = useState(null);
+      const [currentStep, setCurrentStep] = useState(1);
+      const totalSteps = 6;
+      const formRef = useRef(null);
 
-// --- 靜態資料與輔助函數 ---
-const getYearOptions = () => {
-  const currentYear = new Date().getFullYear();
-  const years = [];
-  for (let i = currentYear; i >= currentYear - 100; i--) years.push(i);
-  return years;
-};
-const yearsArr = getYearOptions();
-const months = Array.from({ length: 12 }, (_, i) => i + 1);
-const days = Array.from({ length: 31 }, (_, i) => i + 1);
-const relationOptions = ['本人', '配偶', '子女', '父母', '兄弟姊妹', '其他'];
+      // 初始化年份陣列 (西元 1920 ~ 今年)
+      const currentYear = new Date().getFullYear();
+      const years = Array.from({ length: 106 }, (_, i) => currentYear - i);
+      const months = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
+      const days = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
 
-// --- 子組件 ---
-
-const BirthdayPicker = ({ category, data, updateNestedState, beneficiaries, setFormData, idx = null }) => (
-  <div className="grid grid-cols-3 gap-1">
-    <select 
-      value={data.birthdayY} 
-      onChange={(e) => {
-        if (idx !== null) {
-          const newB = [...beneficiaries]; newB[idx].birthdayY = e.target.value; setFormData(prev => ({...prev, beneficiaries: newB}));
-        } else updateNestedState(category, 'birthdayY', e.target.value);
-      }} 
-      className="p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-100 h-11"
-    >
-      {yearsArr.map(y => <option key={y} value={y}>{y} 年</option>)}
-    </select>
-    <select 
-      value={data.birthdayM} 
-      onChange={(e) => {
-        if (idx !== null) {
-          const newB = [...beneficiaries]; newB[idx].birthdayM = e.target.value; setFormData(prev => ({...prev, beneficiaries: newB}));
-        } else updateNestedState(category, 'birthdayM', e.target.value);
-      }} 
-      className="p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-100 h-11"
-    >
-      {months.map(m => <option key={m} value={m}>{m} 月</option>)}
-    </select>
-    <select 
-      value={data.birthdayD} 
-      onChange={(e) => {
-        if (idx !== null) {
-          const newB = [...beneficiaries]; newB[idx].birthdayD = e.target.value; setFormData(prev => ({...prev, beneficiaries: newB}));
-        } else updateNestedState(category, 'birthdayD', e.target.value);
-      }} 
-      className="p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-100 h-11"
-    >
-      {days.map(d => <option key={d} value={d}>{d} 日</option>)}
-    </select>
-  </div>
-);
-
-const FinancialForm = ({ title, category, data, defaultAddress, updateNestedState, handleNumericChange, onSync = null }) => (
-  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-    <div className="flex flex-col gap-3 mb-2">
-      <div className="flex items-center gap-2 text-blue-800 font-black text-lg">
-        <DollarSign className="text-blue-600"/> {title}
-      </div>
-      {onSync && (
-        <button onClick={onSync} className="w-full bg-orange-500 text-white py-3 rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-transform h-12">
-          <ArrowRightLeft className="w-4 h-4" /> 同被保險人財務資料
-        </button>
-      )}
-    </div>
-    <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex gap-3 items-start">
-      <Info className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
-      <p className="text-[11px] text-amber-800 font-bold">金額、坪數若無請填「0」。資料受安全加密保護。</p>
-    </div>
-
-    {!(data.sameAsInsured && category === 'financialProposer') ? (
-      <div className="space-y-5">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-bold text-gray-700 mb-1.5">大約年薪 (萬) *</label>
-            <input 
-              type="text" 
-              inputMode="numeric"
-              value={data.income} 
-              onChange={(e) => handleNumericChange(category, 'income', e.target.value)} 
-              className="w-full p-3 border border-gray-200 rounded-xl h-12 font-bold" 
-              placeholder="若無填0" 
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-bold text-gray-700 mb-1.5">大約負債 (萬) *</label>
-            <input 
-              type="text" 
-              inputMode="numeric"
-              value={data.liabilities} 
-              onChange={(e) => handleNumericChange(category, 'liabilities', e.target.value)} 
-              className="w-full p-3 border border-gray-200 rounded-xl h-12 font-bold" 
-              placeholder="若無填0" 
-            />
-          </div>
-        </div>
-        <div className="p-5 bg-slate-50 rounded-2xl border border-gray-100 space-y-4">
-          <label className="block text-sm font-bold text-blue-800">動產明細 *</label>
-          <div className="flex gap-6 mb-1">
-            {['存款', '股票/基金'].map(t => (
-              <label key={t} className="flex items-center gap-2 cursor-pointer text-sm font-bold text-gray-600">
-                <input type="radio" checked={data.movableType === t} onChange={() => updateNestedState(category, 'movableType', t)} className="w-4 h-4 text-blue-600" /> {t}
-              </label>
-            ))}
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {data.movableType === '存款' && (
-              <input 
-                type="text" 
-                value={data.bankName} 
-                onChange={(e) => updateNestedState(category, 'bankName', e.target.value)} 
-                className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12" 
-                placeholder="存款銀行名稱" 
-              />
-            )}
-            <input 
-              type="text" 
-              inputMode="numeric"
-              value={data.movableAmount} 
-              onChange={(e) => handleNumericChange(category, 'movableAmount', e.target.value)} 
-              className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12 font-bold" 
-              placeholder={data.movableType === '存款' ? "存款總額 (萬)" : "股票總額 (萬)"} 
-            />
-          </div>
-        </div>
-        <div className="p-5 bg-blue-50/50 rounded-2xl border border-blue-100 space-y-4">
-          <label className="block text-sm font-bold text-blue-800">不動產狀況 *</label>
-          <select value={data.immovableHas} onChange={(e) => updateNestedState(category, 'immovableHas', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl text-sm bg-white font-bold h-12">
-            <option value="無">無不動產</option>
-            <option value="有">有不動產</option>
-          </select>
-          {data.immovableHas === '有' && (
-            <div className="animate-in slide-in-from-top-2 duration-300 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-500 mb-1">大約坪數</label>
-                  <input 
-                    type="text" 
-                    inputMode="numeric"
-                    value={data.immovableSize} 
-                    onChange={(e) => handleNumericChange(category, 'immovableSize', e.target.value)} 
-                    className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12 font-bold" 
-                    placeholder="坪數" 
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-500 mb-1">大約價值 (萬)</label>
-                  <input 
-                    type="text" 
-                    inputMode="numeric"
-                    value={data.immovableValue} 
-                    onChange={(e) => handleNumericChange(category, 'immovableValue', e.target.value)} 
-                    className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12 font-bold" 
-                    placeholder="價值(萬)" 
-                  />
-                </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="block text-[10px] font-bold text-gray-500">不動產詳細地址</label>
-                <button 
-                  onClick={() => updateNestedState(category, 'immovableAddr', defaultAddress)} 
-                  className="w-full bg-blue-100 text-blue-700 py-2.5 rounded-xl text-xs font-black flex items-center justify-center gap-1 active:scale-95 transition-transform"
-                >
-                  <MapPin className="w-3 h-3" /> 同上方通訊地址
-                </button>
-                <input type="text" value={data.immovableAddr} onChange={(e) => updateNestedState(category, 'immovableAddr', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12" placeholder="請輸入地址" />
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    ) : (
-      <div className="py-16 text-center bg-blue-50 rounded-3xl border-2 border-dashed border-blue-200">
-        <p className="text-blue-800 font-black">已同步被保人資料</p>
-      </div>
-    )}
-  </div>
-);
-
-// --- 主應用程式 ---
-
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [step, setStep] = useState(1);
-  const [isSubmitted, setIsSubmitted] = useState(false);
-  const [showAdmin, setShowAdmin] = useState(false);
-  const [submissions, setSubmissions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState(null);
-
-  const cardRefs = [useRef(), useRef(), useRef(), useRef()];
-  const expiryMMRef = useRef();
-  const expiryYYRef = useRef();
-
-  const [formData, setFormData] = useState({
-    insured: {
-      name: '', birthdayY: '1990', birthdayM: '1', birthdayD: '1', id: '', phone: '', address: '', email: '',
-      height: '', weight: '', workPlace: '', jobTitle: '', jobContent: '', medicalHistory: ''
-    },
-    sameAsInsured: false,
-    proposer: {
-      name: '', birthdayY: '1990', birthdayM: '1', birthdayD: '1', id: '', phone: '', 
-      relation: '配偶', relationOther: '',
-      contactAddress: '', billingAddress: '',
-      workPlace: '', jobTitle: '', jobContent: ''
-    },
-    financialInsured: {
-      income: '', liabilities: '', movableType: '存款', bankName: '', movableAmount: '', 
-      immovableHas: '無', immovableAddr: '', immovableSize: '', immovableValue: ''
-    },
-    financialProposer: {
-      sameAsInsured: false, income: '', liabilities: '', movableType: '存款', bankName: '', movableAmount: '', 
-      immovableHas: '無', immovableAddr: '', immovableSize: '', immovableValue: ''
-    },
-    beneficiaries: [
-      { rank: '1', name: '', id: '', birthdayY: '1990', birthdayM: '1', birthdayD: '1', relation: '配偶', relationOther: '' }
-    ],
-    paymentMethod: '銀行轉帳',
-    bankInfo: '', bankAccount: '', 
-    cardNumbers: ['', '', '', ''], cardExpiryMM: '', cardExpiryYY: '',
-    needNewCard: '否'
-  });
-
-  // --- Firebase Auth 初始化 ---
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error("Auth initialization failed:", err);
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
-  }, []);
-
-  // --- Firestore 資料同步 ---
-  useEffect(() => {
-    if (!user || !showAdmin) return;
-    
-    const q = collection(db, 'artifacts', appId, 'public', 'data', 'submissions');
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setSubmissions(data);
-    }, (err) => {
-      console.error("Firestore Listener Error:", err);
-    });
-    
-    return () => unsubscribe();
-  }, [user, showAdmin]);
-
-  const updateNestedState = useCallback((category, field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [category]: { ...prev[category], [field]: value }
-    }));
-  }, []);
-
-  const handleNumericChange = useCallback((category, field, value) => {
-    const cleanedValue = value.replace(/\D/g, '');
-    updateNestedState(category, field, cleanedValue);
-  }, [updateNestedState]);
-
-  const handleCopyInsuredToProposer = () => {
-    const isNowSame = !formData.sameAsInsured;
-    setFormData(prev => ({
-      ...prev,
-      sameAsInsured: isNowSame,
-      proposer: isNowSame ? { 
-        ...prev.proposer,
-        name: prev.insured.name,
-        birthdayY: prev.insured.birthdayY,
-        birthdayM: prev.insured.birthdayM,
-        birthdayD: prev.insured.birthdayD,
-        id: prev.insured.id,
-        phone: prev.insured.phone,
-        contactAddress: prev.insured.address,
-        billingAddress: prev.insured.address,
-        workPlace: prev.insured.workPlace,
-        jobTitle: prev.insured.jobTitle,
-        jobContent: prev.insured.jobContent,
-        relation: '本人'
-      } : prev.proposer
-    }));
-  };
-
-  const handleAdminToggle = () => {
-    if (!showAdmin) {
-      const pwd = prompt("請輸入管理員查看密碼：");
-      if (pwd === "8888") setShowAdmin(true);
-      else if (pwd !== null) alert("密碼錯誤");
-    } else setShowAdmin(false);
-  };
-
-  const exportToCSV = () => {
-    if (submissions.length === 0) return;
-    const headers = ["提交時間", "被保人姓名", "身分證", "電話", "要保人姓名", "關係", "支付方式"];
-    const csvRows = [headers.join(",")];
-    submissions.forEach(sub => {
-      const row = [
-        `"${sub.submittedAt || ''}"`, 
-        `"${sub.insured?.name || ''}"`, 
-        `"${sub.insured?.id || ''}"`,
-        `"${sub.insured?.phone || ''}"`, 
-        `"${sub.proposer?.name || ''}"`, 
-        `"${sub.proposer?.relation || ''}"`, 
-        `"${sub.paymentMethod || ''}"`
-      ];
-      csvRows.push(row.join(","));
-    });
-    const csvString = "\ufeff" + csvRows.join("\n");
-    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `資料彙總_${new Date().toLocaleDateString()}.csv`;
-    link.click();
-  };
-
-  const handleCardNumberChange = (index, value) => {
-    const val = value.replace(/\D/g, '').slice(0, 4);
-    const newNums = [...formData.cardNumbers];
-    newNums[index] = val;
-    setFormData(prev => ({ ...prev, cardNumbers: newNums }));
-    if (val.length === 4 && index < 3) cardRefs[index + 1].current?.focus();
-  };
-
-  const handleExpiryChange = (field, value) => {
-    const val = value.replace(/\D/g, '').slice(0, 2);
-    setFormData(prev => ({ ...prev, [field]: val }));
-    if (field === 'cardExpiryMM' && val.length === 2) expiryYYRef.current?.focus();
-  };
-
-  const handleSubmit = async () => {
-    if (!user) {
-      setMessage("請稍候，正進行安全連線...");
-      return;
-    }
-    if (formData.beneficiaries.length === 0 || !formData.beneficiaries[0].name) {
-      setMessage("請至少填寫一位受益人姓名");
-      return;
-    }
-    setLoading(true);
-    try {
-      // 1. 存入 Firestore
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'), {
-        ...formData,
-        submittedAt: new Date().toISOString(),
-        userId: user.uid
+      // 表單狀態
+      const [formData, setFormData] = useState({
+        insured: {
+          name: '', id: '', birthDate: { Y: '', M: '', D: '' }, phone: '', email: '',
+          height: '', weight: '', address: '', workPlace: '',
+          jobTitle: '', jobContent: '', medicalHistory: ''
+        },
+        sameAsInsured: true,
+        proposer: {
+          name: '', id: '', birthDate: { Y: '', M: '', D: '' }, phone: '',
+          contactAddress: '', billingAddress: '', workPlace: '',
+          jobTitle: '', jobContent: '', relation: '配偶'
+        },
+        financialInsured: { 
+          income: '', liabilities: '', 
+          depositBank: '', depositAmount: '', stockAmount: '', 
+          immovableHas: '無', immovableAddr: '', immovableSize: '', immovableValue: '' 
+        },
+        financialProposer: { 
+          income: '', liabilities: '', 
+          depositBank: '', depositAmount: '', stockAmount: '', 
+          immovableHas: '無', immovableAddr: '', immovableSize: '', immovableValue: '' 
+        },
+        beneficiaries: [
+          { key: Date.now(), rank: '1', name: '', uid: '', birthDate: { Y: '', M: '', D: '' }, relation: '' }
+        ],
+        payment: {
+          method: '銀行轉帳', bankInfo: '', bankAccount: '',
+          card1: '', card2: '', card3: '', card4: '',
+          cardExpiryMM: '01', cardExpiryYY: '26'
+        },
+        needNewCard: '否'
       });
 
-      // 2. 觸發 Google Script (如果有)
-      if (GOOGLE_SCRIPT_URL) {
-        await fetch(GOOGLE_SCRIPT_URL, {
-          method: 'POST',
-          mode: 'no-cors', 
-          cache: 'no-cache',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formData)
-        });
-      }
-      setIsSubmitted(true);
-    } catch (error) {
-      console.error("Submission Error:", error);
-      setMessage("儲存失敗，請檢查網路連線後再試。");
-    } finally {
-      setLoading(false);
-    }
-  };
+      const handleChange = (section, field, value) => {
+        setFormData(prev => ({ ...prev, [section]: { ...prev[section], [field]: value } }));
+      };
 
-  const steps = [
-    { id: 1, title: '被保人' },
-    { id: 2, title: '要保人' },
-    { id: 3, title: '被保財務' },
-    { id: 4, title: '要保財務' },
-    { id: 5, title: '受益人' },
-    { id: 6, title: '支付' },
-    { id: 7, title: '需求' }
-  ];
+      const handleDateChange = (section, type, value, index = null) => {
+        if (section === 'beneficiaries' && index !== null) {
+          const newBens = [...formData.beneficiaries];
+          newBens[index].birthDate[type] = value;
+          setFormData(prev => ({ ...prev, beneficiaries: newBens }));
+        } else {
+          setFormData(prev => ({ ...prev, [section]: { ...prev[section], birthDate: { ...prev[section].birthDate, [type]: value } } }));
+        }
+      };
 
-  const isStepValid = () => {
-    if (step === 1) return formData.insured.name && formData.insured.id && formData.insured.phone;
-    if (step === 3) {
-      const f = formData.financialInsured;
-      return f.income !== '' && f.liabilities !== '' && f.movableAmount !== '';
-    }
-    if (step === 4) {
-      if (formData.financialProposer.sameAsInsured) return true;
-      const f = formData.financialProposer;
-      return f.income !== '' && f.liabilities !== '' && f.movableAmount !== '';
-    }
-    return true;
-  };
+      const handleCardChange = (e, index) => {
+        const val = e.target.value.replace(/\D/g, '');
+        handleChange('payment', `card${index}`, val);
+        if (val.length === 4 && index < 4) {
+          document.getElementById(`card${index + 1}`).focus();
+        }
+      };
 
-  if (isSubmitted) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4 text-center">
-        <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-10 border border-gray-100">
-          <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-6" />
-          <h2 className="text-2xl font-bold text-gray-800 mb-3">資料已成功送出</h2>
-          <p className="text-gray-500 mb-8">我們已收到您的投保資料，專員將盡快聯繫您。</p>
-          <button onClick={() => window.location.reload()} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-lg hover:bg-blue-700 transition-all">返回首頁</button>
-        </div>
-      </div>
-    );
-  }
+      const addBeneficiary = () => {
+        setFormData(prev => ({ ...prev, beneficiaries: [...prev.beneficiaries, { key: Date.now() + Math.random(), rank: '1', name: '', uid: '', birthDate: { Y: '', M: '', D: '' }, relation: '' }] }));
+      };
 
-  return (
-    <div className="min-h-screen bg-slate-50 pb-16 font-sans">
-      <header className="bg-blue-800 text-white py-6 px-4 shadow-xl sticky top-0 z-50">
-        <div className="max-w-2xl mx-auto flex justify-between items-center">
-          <div>
-            <h1 className="text-xl font-black tracking-tight flex items-center gap-2">
-              <ShieldCheck className="text-blue-300" /> 投保所需基本資料
-            </h1>
-            <p className="text-blue-200 text-[10px] font-medium tracking-widest mt-0.5 uppercase">Security & Confidentiality</p>
+      const removeBeneficiary = (index) => {
+        const newBens = [...formData.beneficiaries];
+        newBens.splice(index, 1);
+        setFormData(prev => ({ ...prev, beneficiaries: newBens }));
+      };
+
+      const updateBeneficiary = (index, field, value) => {
+        const newBens = [...formData.beneficiaries];
+        newBens[index][field] = value;
+        setFormData(prev => ({ ...prev, beneficiaries: newBens }));
+      };
+
+      // 智慧驗證與送出邏輯 (防跳轉第一頁的核心)
+      const handleManualSubmit = async () => {
+        if (!formRef.current) return;
+
+        // 檢查是否有漏填的必填欄位
+        const invalidInputs = formRef.current.querySelectorAll(':invalid');
+        
+        if (invalidInputs.length > 0) {
+          // 找到第一個錯誤欄位所在的分頁
+          const firstInvalid = invalidInputs[0];
+          const stepDiv = firstInvalid.closest('.step-container');
+          
+          if (stepDiv) {
+            const stepNum = parseInt(stepDiv.dataset.step, 10);
+            if (currentStep !== stepNum) {
+              // 切換到錯誤的分頁
+              setCurrentStep(stepNum);
+              // 等待渲染後提示錯誤
+              setTimeout(() => {
+                formRef.current.reportValidity();
+                firstInvalid.focus();
+              }, 100);
+              return;
+            }
+          }
+          // 如果就在當前頁面，直接提示
+          formRef.current.reportValidity();
+          firstInvalid.focus();
+          return;
+        }
+
+        // 驗證通過，開始建構 Payload 並傳送
+        setIsSubmitting(true);
+        setSubmitStatus(null);
+
+        try {
+          // 使用可選鏈 (?.) 確保不會因為空值導致 JS 崩潰
+          const payload = {
+            insured: {
+              ...formData.insured,
+              birthdayY: formData.insured?.birthDate?.Y || '', 
+              birthdayM: formData.insured?.birthDate?.M || '', 
+              birthdayD: formData.insured?.birthDate?.D || '',
+            },
+            sameAsInsured: formData.sameAsInsured,
+            proposer: formData.sameAsInsured ? {} : {
+              ...formData.proposer,
+              birthdayY: formData.proposer?.birthDate?.Y || '', 
+              birthdayM: formData.proposer?.birthDate?.M || '', 
+              birthdayD: formData.proposer?.birthDate?.D || '',
+            },
+            financialInsured: {
+              income: formData.financialInsured?.income || '0',
+              liabilities: formData.financialInsured?.liabilities || '0',
+              movableType: '存款及股票/基金',
+              bankName: formData.financialInsured?.depositBank || '',
+              movableAmount: String(Number(formData.financialInsured?.depositAmount || 0) + Number(formData.financialInsured?.stockAmount || 0)),
+              immovableHas: formData.financialInsured?.immovableHas || '無',
+              immovableSize: formData.financialInsured?.immovableSize || '', 
+              immovableValue: formData.financialInsured?.immovableValue || '', 
+              immovableAddr: formData.financialInsured?.immovableAddr || ''
+            },
+            financialProposer: formData.sameAsInsured ? { sameAsInsured: true } : {
+              income: formData.financialProposer?.income || '0',
+              liabilities: formData.financialProposer?.liabilities || '0',
+              movableType: '存款及股票/基金',
+              bankName: formData.financialProposer?.depositBank || '',
+              movableAmount: String(Number(formData.financialProposer?.depositAmount || 0) + Number(formData.financialProposer?.stockAmount || 0)),
+              immovableHas: formData.financialProposer?.immovableHas || '無',
+              immovableSize: formData.financialProposer?.immovableSize || '', 
+              immovableValue: formData.financialProposer?.immovableValue || '', 
+              immovableAddr: formData.financialProposer?.immovableAddr || ''
+            },
+            beneficiaries: formData.beneficiaries.filter(b => b.name).map(b => ({
+              rank: b.rank, name: b.name, id: b.uid, relation: b.relation,
+              birthdayY: b?.birthDate?.Y || '', birthdayM: b?.birthDate?.M || '', birthdayD: b?.birthDate?.D || ''
+            })),
+            paymentMethod: formData.payment.method, bankInfo: formData.payment.bankInfo, bankAccount: formData.payment.bankAccount,
+            cardNumbers: [formData.payment.card1, formData.payment.card2, formData.payment.card3, formData.payment.card4],
+            cardExpiryMM: formData.payment.cardExpiryMM, cardExpiryYY: formData.payment.cardExpiryYY,
+            needNewCard: formData.needNewCard
+          };
+
+          payload.beneficiaries.push({ rank: '最後', name: "法定繼承人", id: "", relation: "法定繼承人", birthdayY: "", birthdayM: "", birthdayD: "" });
+
+          // 傳送給 GAS
+          await fetch(scriptUrl, { 
+            method: "POST", 
+            mode: "no-cors", 
+            headers: { "Content-Type": "text/plain;charset=utf-8" }, 
+            body: JSON.stringify(payload) 
+          });
+
+          setSubmitStatus('success');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        } catch (error) {
+          console.error("提交失敗:", error);
+          setSubmitStatus('error');
+        } finally {
+          setIsSubmitting(false);
+        }
+      };
+
+      const nextStep = () => {
+        const currentStepDiv = document.querySelector(`.step-container[data-step="${currentStep}"]`);
+        const inputs = currentStepDiv.querySelectorAll('input[required], select[required], textarea[required]');
+        let isValid = true;
+        for (let input of inputs) {
+          if (!input.checkValidity()) {
+            input.reportValidity();
+            isValid = false;
+            break;
+          }
+        }
+        if (isValid) {
+          setCurrentStep(prev => Math.min(prev + 1, totalSteps));
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      };
+
+      const prevStep = () => {
+        setCurrentStep(prev => Math.max(prev - 1, 1));
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      };
+
+      // 共用 UI 組件
+      const InputLabel = ({ children, required }) => (
+        <label className="block text-sm font-bold text-gray-700 mb-2 ml-1">
+          {children} {required && <span className="text-red-500">*</span>}
+        </label>
+      );
+
+      const baseInputClass = "w-full rounded-2xl bg-gray-50 border border-gray-200/60 p-3.5 text-gray-800 text-base focus:bg-white focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400";
+      
+      // 新增專屬信用卡的輸入框樣式，確保手機版不會破版
+      const cardInputClass = "min-w-0 flex-1 rounded-xl bg-white border border-gray-200/60 py-3.5 px-0.5 sm:px-3 text-center text-gray-800 text-base sm:text-lg font-mono font-bold focus:bg-white focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all shadow-sm tracking-normal";
+
+      const DateSelector = ({ section, index = null }) => {
+        const data = index !== null ? formData[section][index].birthDate : formData[section].birthDate;
+        return (
+          <div className="flex gap-2">
+            <select required className={`${baseInputClass} flex-1 px-2 font-medium`} value={data.Y} onChange={e => handleDateChange(section, 'Y', e.target.value, index)}>
+              <option value="" disabled>年</option>{years.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <select required className={`${baseInputClass} flex-1 px-2 font-medium`} value={data.M} onChange={e => handleDateChange(section, 'M', e.target.value, index)}>
+              <option value="" disabled>月</option>{months.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <select required className={`${baseInputClass} flex-1 px-2 font-medium`} value={data.D} onChange={e => handleDateChange(section, 'D', e.target.value, index)}>
+              <option value="" disabled>日</option>{days.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
           </div>
-          <button onClick={handleAdminToggle} className="p-2.5 bg-blue-700 rounded-xl h-11 w-11 flex items-center justify-center transition-colors hover:bg-blue-600">
-            <Database className="w-5 h-5" />
-          </button>
-        </div>
-      </header>
+        );
+      };
 
-      <main className="max-w-2xl mx-auto px-4 mt-6">
-        {!showAdmin ? (
-          <>
-            <div className="flex justify-between mb-8 overflow-x-auto py-3 bg-white px-4 rounded-2xl shadow-sm border border-gray-100 scrollbar-hide">
-              {steps.map((s) => (
-                <button key={s.id} onClick={() => { if (s.id <= step || isStepValid()) setStep(s.id); }} className="flex flex-col items-center min-w-[65px] group">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-black transition-all ${step === s.id ? 'bg-blue-600 text-white shadow-lg' : step > s.id ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-400'}`}>
-                    {step > s.id ? <CheckCircle className="w-5 h-5" /> : s.id}
+      return (
+        <div className="min-h-screen bg-[#F4F6F8] pb-32 pt-8 px-4 sm:px-6 font-sans">
+          <div className="max-w-2xl mx-auto">
+            
+            {/* 頭部標題與小圓點進度條 */}
+            <div className="text-center mb-8">
+              <h1 className="text-2xl sm:text-3xl font-black text-gray-900 mb-3 tracking-tight">專屬保單資料填寫</h1>
+              
+              {!submitStatus && (
+                <div className="flex flex-col items-center justify-center mt-6">
+                  <div className="flex items-center space-x-2 sm:space-x-3">
+                    {[1, 2, 3, 4, 5, 6].map((step) => (
+                      <div key={step} className="flex items-center">
+                        <div className={`transition-all duration-500 ease-in-out rounded-full 
+                          ${currentStep === step ? 'w-8 sm:w-10 h-2.5 bg-blue-600 shadow-sm' : currentStep > step ? 'w-2.5 h-2.5 bg-blue-300' : 'w-2.5 h-2.5 bg-gray-300'}`} 
+                        />
+                      </div>
+                    ))}
                   </div>
-                  <span className={`text-[10px] mt-2 font-bold ${step === s.id ? 'text-blue-600' : 'text-gray-400'}`}>{s.title}</span>
-                </button>
-              ))}
+                  <span className="text-xs font-bold text-gray-400 mt-3 tracking-widest uppercase">
+                    Step {currentStep} of {totalSteps}
+                  </span>
+                </div>
+              )}
             </div>
 
-            <div className="bg-white rounded-3xl shadow-xl p-6 md:p-10 border border-gray-50">
-              {step === 1 && (
-                <div className="space-y-5 animate-in fade-in">
-                   <div className="flex items-center gap-2 mb-4 text-blue-800 font-black text-lg"><User className="text-blue-600"/> 1. 被保人資料</div>
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                     <input type="text" value={formData.insured.name} onChange={(e) => updateNestedState('insured', 'name', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="姓名 *" />
-                     <input type="text" value={formData.insured.id} onChange={(e) => updateNestedState('insured', 'id', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="身分證 *" />
-                   </div>
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                     <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1">出生年月日 *</label>
-                        <BirthdayPicker category="insured" data={formData.insured} updateNestedState={updateNestedState} setFormData={setFormData} />
-                     </div>
-                     <div><label className="block text-xs font-bold text-gray-500 mb-1">手機 *</label><input type="tel" value={formData.insured.phone} onChange={(e) => updateNestedState('insured', 'phone', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="09XX-XXX-XXX" /></div>
-                   </div>
-                   <div className="grid grid-cols-2 gap-4">
-                     <input 
-                       type="text" 
-                       inputMode="numeric"
-                       value={formData.insured.height} 
-                       onChange={(e) => handleNumericChange('insured', 'height', e.target.value)} 
-                       className="w-full p-3 border rounded-xl h-12 font-bold" 
-                       placeholder="身高 (cm) *" 
-                     />
-                     <input 
-                       type="text" 
-                       inputMode="numeric"
-                       value={formData.insured.weight} 
-                       onChange={(e) => handleNumericChange('insured', 'weight', e.target.value)} 
-                       className="w-full p-3 border rounded-xl h-12 font-bold" 
-                       placeholder="體重 (kg) *" 
-                     />
-                   </div>
-                   <input type="email" value={formData.insured.email} onChange={(e) => updateNestedState('insured', 'email', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="Email" />
-                   <input type="text" value={formData.insured.address} onChange={(e) => updateNestedState('insured', 'address', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="通訊地址" />
-                   <div className="grid grid-cols-2 gap-4">
-                     <input type="text" value={formData.insured.workPlace} onChange={(e) => updateNestedState('insured', 'workPlace', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="公司/學校" />
-                     <input type="text" value={formData.insured.jobTitle} onChange={(e) => updateNestedState('insured', 'jobTitle', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="職稱" />
-                   </div>
-                   <textarea value={formData.insured.jobContent} onChange={(e) => updateNestedState('insured', 'jobContent', e.target.value)} rows={2} className="w-full p-3 border rounded-xl" placeholder="工作內容" />
-                   <textarea value={formData.insured.medicalHistory} onChange={(e) => updateNestedState('insured', 'medicalHistory', e.target.value)} rows={3} className="w-full p-3 border rounded-xl text-sm" placeholder="病史備註 (若曾住院5天以上或持續看診，請註明醫院、病名、發現時間、現況及用藥)" />
+            {submitStatus === 'success' && (
+              <div className="bg-white rounded-[2rem] shadow-xl shadow-green-100/50 p-10 text-center border border-green-50 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <CheckCircle className="text-green-500 w-10 h-10" />
                 </div>
-              )}
+                <h2 className="text-2xl font-black text-gray-800 mb-3">資料已成功送出！</h2>
+                <p className="text-gray-500 mb-8 leading-relaxed">感謝您的填寫，我們將嚴格保密您的資料，並盡快為您處理後續作業。</p>
+                <button onClick={() => window.location.reload()} className="w-full bg-gray-900 text-white rounded-2xl py-4 font-bold text-lg hover:bg-gray-800 transition-colors shadow-lg shadow-gray-900/20 active:scale-95">
+                  填寫下一份表單
+                </button>
+              </div>
+            )}
 
-              {step === 2 && (
-                <div className="space-y-5 animate-in fade-in">
-                  <div className="flex flex-col gap-4 mb-6">
-                    <div className="flex items-center gap-2 text-blue-800 font-black text-lg"><Users className="text-blue-600"/> 2. 要保人資料</div>
-                    <button onClick={handleCopyInsuredToProposer} className={`w-full py-4 rounded-xl font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 h-14 ${formData.sameAsInsured ? 'bg-green-600 text-white' : 'bg-orange-500 text-white'}`}>
-                      <ArrowRightLeft className="w-5 h-5" /> 同被保險人 (一鍵帶入)
-                    </button>
-                  </div>
-                  {!formData.sameAsInsured ? (
-                    <div className="space-y-5">
-                      <div><label className="block text-xs font-bold text-gray-500 mb-1.5">與被保人關係 *</label><select value={formData.proposer.relation} onChange={(e) => updateNestedState('proposer', 'relation', e.target.value)} className="w-full p-3 border rounded-xl bg-white h-12">{relationOptions.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <input type="text" value={formData.proposer.name} onChange={(e) => updateNestedState('proposer', 'name', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl h-12" placeholder="姓名 *" />
-                        <input type="text" value={formData.proposer.id} onChange={(e) => updateNestedState('proposer', 'id', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl h-12" placeholder="身分證 *" />
+            {submitStatus === 'error' && (
+              <div className="mb-8 p-5 bg-red-50 border border-red-100 rounded-3xl flex items-center shadow-sm">
+                <AlertCircle className="text-red-500 w-8 h-8 mr-4 shrink-0" />
+                <div>
+                  <h3 className="text-base font-bold text-red-800">資料送出失敗</h3>
+                  <p className="text-sm text-red-600 mt-1">請檢查網路連線或稍後再試。</p>
+                </div>
+              </div>
+            )}
+
+            {!submitStatus && (
+              <form ref={formRef} onSubmit={e => e.preventDefault()} className="relative">
+                
+                {/* --- Step 1. 被保險人基本資料 --- */}
+                <div className={`step-container transition-opacity duration-300 ${currentStep === 1 ? 'opacity-100 block' : 'opacity-0 hidden'}`} data-step="1">
+                  <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100/80 p-6 sm:p-8">
+                    <div className="flex items-center mb-8 pb-5 border-b border-gray-100">
+                      <div className="bg-blue-50 p-3 rounded-2xl mr-4"><User className="w-6 h-6 text-blue-600" /></div>
+                      <h2 className="text-xl font-black text-gray-800">被保險人基本資料</h2>
+                    </div>
+                    
+                    <div className="space-y-6">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                        <div><InputLabel required>姓名</InputLabel><input required type="text" className={baseInputClass} value={formData.insured.name} onChange={e => handleChange('insured', 'name', e.target.value)} /></div>
+                        <div><InputLabel required>身分證字號</InputLabel><input required type="text" className={`${baseInputClass} uppercase font-medium`} value={formData.insured.id} onChange={e => handleChange('insured', 'id', e.target.value)} /></div>
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-gray-500 mb-1">出生年月日 *</label>
-                            <BirthdayPicker category="proposer" data={formData.proposer} updateNestedState={updateNestedState} setFormData={setFormData} />
+                      <div><InputLabel required>出生年月日</InputLabel><DateSelector section="insured" /></div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                        <div><InputLabel required>手機號碼</InputLabel><input required type="tel" className={`${baseInputClass} font-medium`} value={formData.insured.phone} onChange={e => handleChange('insured', 'phone', e.target.value)} /></div>
+                        <div><InputLabel>Email (選填)</InputLabel><input type="email" className={baseInputClass} value={formData.insured.email} onChange={e => handleChange('insured', 'email', e.target.value)} /></div>
+                      </div>
+                      <div><InputLabel required>住址 (通訊地址)</InputLabel><input required type="text" className={baseInputClass} value={formData.insured.address} onChange={e => handleChange('insured', 'address', e.target.value)} /></div>
+                      <div className="flex gap-4">
+                        <div className="flex-1"><InputLabel required>身高 (cm)</InputLabel><input required type="number" className={baseInputClass} value={formData.insured.height} onChange={e => handleChange('insured', 'height', e.target.value)} /></div>
+                        <div className="flex-1"><InputLabel required>體重 (kg)</InputLabel><input required type="number" className={baseInputClass} value={formData.insured.weight} onChange={e => handleChange('insured', 'weight', e.target.value)} /></div>
+                      </div>
+                      <div><InputLabel required>就讀學校 / 服務公司</InputLabel><input required type="text" className={baseInputClass} value={formData.insured.workPlace} onChange={e => handleChange('insured', 'workPlace', e.target.value)} /></div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                        <div><InputLabel required>職稱</InputLabel><input required type="text" className={baseInputClass} value={formData.insured.jobTitle} onChange={e => handleChange('insured', 'jobTitle', e.target.value)} /></div>
+                        <div><InputLabel required>工作內容</InputLabel><input required type="text" className={baseInputClass} value={formData.insured.jobContent} onChange={e => handleChange('insured', 'jobContent', e.target.value)} /></div>
+                      </div>
+                      <div className="pt-2">
+                        <InputLabel>慢性病及既往症 <span className="text-xs text-gray-400 font-normal ml-1">(無則免填)</span></InputLabel>
+                        <textarea rows="3" placeholder="若曾住院5天以上或持續看診，請註明醫院、病名、時間及現況" className={`${baseInputClass} resize-none`} value={formData.insured.medicalHistory} onChange={e => handleChange('insured', 'medicalHistory', e.target.value)}></textarea>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* --- Step 2. 要保人資料 --- */}
+                <div className={`step-container transition-opacity duration-300 ${currentStep === 2 ? 'opacity-100 block' : 'opacity-0 hidden'}`} data-step="2">
+                  <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100/80 p-6 sm:p-8">
+                    <div className="flex items-center mb-8 pb-5 border-b border-gray-100">
+                      <div className="bg-indigo-50 p-3 rounded-2xl mr-4"><FileText className="w-6 h-6 text-indigo-600" /></div>
+                      <h2 className="text-xl font-black text-gray-800">要保人資料</h2>
+                    </div>
+                    
+                    <div className="mb-8">
+                      <InputLabel>要保人是否與被保險人為同一人？</InputLabel>
+                      <div className="flex gap-3 mt-3">
+                        <button type="button" onClick={() => setFormData({...formData, sameAsInsured: true})} className={`flex-1 py-4 text-base font-black rounded-2xl transition-all shadow-sm active:scale-95 ${formData.sameAsInsured ? 'bg-indigo-600 text-white shadow-indigo-600/30' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 border border-transparent'}`}>是，同一人</button>
+                        <button type="button" onClick={() => setFormData({...formData, sameAsInsured: false})} className={`flex-1 py-4 text-base font-black rounded-2xl transition-all shadow-sm active:scale-95 ${!formData.sameAsInsured ? 'bg-indigo-600 text-white shadow-indigo-600/30' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 border border-transparent'}`}>否，不同人</button>
+                      </div>
+                    </div>
+
+                    {!formData.sameAsInsured && (
+                      <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-500">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                          <div><InputLabel required>姓名</InputLabel><input required={!formData.sameAsInsured} type="text" className={baseInputClass} value={formData.proposer.name} onChange={e => handleChange('proposer', 'name', e.target.value)} /></div>
+                          <div><InputLabel required>身分證字號</InputLabel><input required={!formData.sameAsInsured} type="text" className={`${baseInputClass} uppercase font-medium`} value={formData.proposer.id} onChange={e => handleChange('proposer', 'id', e.target.value)} /></div>
                         </div>
-                        <div><label className="block text-xs font-bold text-gray-500 mb-1">電話 *</label><input type="tel" value={formData.proposer.phone} onChange={(e) => updateNestedState('proposer', 'phone', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="手機 *" /></div>
+                        <div><InputLabel required>出生年月日</InputLabel><DateSelector section="proposer" /></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                          <div><InputLabel required>手機號碼</InputLabel><input required={!formData.sameAsInsured} type="tel" className={`${baseInputClass} font-medium`} value={formData.proposer.phone} onChange={e => handleChange('proposer', 'phone', e.target.value)} /></div>
+                          <div>
+                            <InputLabel required>與被保人關係</InputLabel>
+                            <select required={!formData.sameAsInsured} className={baseInputClass} value={formData.proposer.relation} onChange={e => handleChange('proposer', 'relation', e.target.value)}>
+                              {['配偶', '子女', '父母', '兄弟姊妹', '其他'].map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        
+                        <div>
+                          <div className="flex justify-between items-end mb-2">
+                            <InputLabel required>聯絡地址</InputLabel>
+                            <button type="button" onClick={() => handleChange('proposer', 'contactAddress', formData.insured.address)} className="text-sm bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-4 py-1.5 rounded-full font-black transition-all shadow-sm active:scale-95 border border-indigo-200 -mt-2">⚡ 同被保人</button>
+                          </div>
+                          <input required={!formData.sameAsInsured} type="text" className={baseInputClass} value={formData.proposer.contactAddress} onChange={e => handleChange('proposer', 'contactAddress', e.target.value)} />
+                        </div>
+
+                        <div>
+                          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end mb-2 gap-2">
+                            <InputLabel required>收費地址</InputLabel>
+                            <div className="flex gap-2 sm:-mt-2">
+                              <button type="button" onClick={() => handleChange('proposer', 'billingAddress', formData.proposer.contactAddress)} className="flex-1 sm:flex-none text-sm bg-emerald-100 text-emerald-800 hover:bg-emerald-200 px-4 py-1.5 rounded-full font-black transition-all shadow-sm active:scale-95 border border-emerald-200">⚡ 同要保人</button>
+                              <button type="button" onClick={() => handleChange('proposer', 'billingAddress', formData.insured.address)} className="flex-1 sm:flex-none text-sm bg-blue-100 text-blue-700 hover:bg-blue-200 px-4 py-1.5 rounded-full font-black transition-all shadow-sm active:scale-95 border border-blue-200">⚡ 同被保人</button>
+                            </div>
+                          </div>
+                          <input required={!formData.sameAsInsured} type="text" className={baseInputClass} value={formData.proposer.billingAddress} onChange={e => handleChange('proposer', 'billingAddress', e.target.value)} />
+                        </div>
+
+                        <div><InputLabel required>就讀學校 / 服務公司</InputLabel><input required={!formData.sameAsInsured} type="text" className={baseInputClass} value={formData.proposer.workPlace} onChange={e => handleChange('proposer', 'workPlace', e.target.value)} /></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                          <div><InputLabel required>職稱</InputLabel><input required={!formData.sameAsInsured} type="text" className={baseInputClass} value={formData.proposer.jobTitle} onChange={e => handleChange('proposer', 'jobTitle', e.target.value)} /></div>
+                          <div><InputLabel required>工作內容</InputLabel><input required={!formData.sameAsInsured} type="text" className={baseInputClass} value={formData.proposer.jobContent} onChange={e => handleChange('proposer', 'jobContent', e.target.value)} /></div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* --- Step 3. 財務核保資訊 --- */}
+                <div className={`step-container transition-opacity duration-300 ${currentStep === 3 ? 'opacity-100 block' : 'opacity-0 hidden'}`} data-step="3">
+                  <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100/80 p-6 sm:p-8">
+                    <div className="flex items-center mb-6 pb-5 border-b border-gray-100">
+                      <div className="bg-emerald-50 p-3 rounded-2xl mr-4"><DollarSign className="w-6 h-6 text-emerald-600" /></div>
+                      <div>
+                        <h2 className="text-xl font-black text-gray-800">財務核保資訊</h2>
+                        <p className="text-xs text-gray-500 mt-1">資料依財政部規定辦理，將嚴格保密</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-8">
+                      {/* 被保險人財務狀況 */}
+                      <div className="bg-emerald-50/30 p-5 sm:p-6 rounded-[2rem] border border-emerald-100">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-5">
+                          <h3 className="font-black text-emerald-800 text-lg flex items-center mb-3 sm:mb-0">
+                            <div className="w-2.5 h-6 bg-emerald-500 rounded-full mr-3"></div>
+                            被保險人財務狀況
+                          </h3>
+                        </div>
+                        
+                        <div className="space-y-6">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div><InputLabel required>年薪 (萬元)</InputLabel><input required type="number" className={baseInputClass} value={formData.financialInsured.income} onChange={e => handleChange('financialInsured', 'income', e.target.value)} /></div>
+                            <div><InputLabel required>負債 (萬元)</InputLabel><input required type="number" className={baseInputClass} value={formData.financialInsured.liabilities} onChange={e => handleChange('financialInsured', 'liabilities', e.target.value)} /></div>
+                          </div>
+
+                          <div>
+                            <InputLabel>動產狀況 (選填)</InputLabel>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div className="bg-white p-2 rounded-2xl border border-gray-200 shadow-sm flex items-center focus-within:ring-2 focus-within:ring-emerald-500/50 focus-within:border-emerald-500 transition-all">
+                                <span className="text-sm font-black text-gray-500 w-16 text-center shrink-0">存款</span>
+                                <input type="text" placeholder="EX：富邦銀行" className="flex-[2] w-full bg-transparent p-2 outline-none text-gray-700 border-r border-gray-100 placeholder:text-gray-300 font-medium" value={formData.financialInsured.depositBank} onChange={e => handleChange('financialInsured', 'depositBank', e.target.value)} />
+                                <input type="number" placeholder="萬" className="flex-1 w-full bg-transparent p-2 outline-none text-gray-700 pl-3 placeholder:text-gray-300 font-medium" value={formData.financialInsured.depositAmount} onChange={e => handleChange('financialInsured', 'depositAmount', e.target.value)} />
+                              </div>
+                              <div className="bg-white p-2 rounded-2xl border border-gray-200 shadow-sm flex items-center focus-within:ring-2 focus-within:ring-emerald-500/50 focus-within:border-emerald-500 transition-all">
+                                <span className="text-sm font-black text-gray-500 w-24 text-center shrink-0">股票/基金</span>
+                                <input type="number" placeholder="總額(萬)" className="flex-1 w-full bg-transparent p-2 outline-none text-gray-700 placeholder:text-gray-300 font-medium" value={formData.financialInsured.stockAmount} onChange={e => handleChange('financialInsured', 'stockAmount', e.target.value)} />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div>
+                            <InputLabel required>不動產狀況</InputLabel>
+                            <div className="flex gap-3 mb-4">
+                              <button type="button" onClick={() => handleChange('financialInsured', 'immovableHas', '無')} className={`flex-1 py-3.5 text-sm font-black rounded-xl transition-all shadow-sm active:scale-95 border border-transparent ${formData.financialInsured.immovableHas === '無' ? 'bg-gray-800 text-white' : 'bg-white text-gray-500 hover:bg-gray-100 border-gray-200'}`}>無不動產</button>
+                              <button type="button" onClick={() => handleChange('financialInsured', 'immovableHas', '有')} className={`flex-1 py-3.5 text-sm font-black rounded-xl transition-all shadow-sm active:scale-95 border border-transparent ${formData.financialInsured.immovableHas === '有' ? 'bg-emerald-600 text-white shadow-emerald-600/30' : 'bg-white text-gray-500 hover:bg-gray-100 border-gray-200'}`}>有不動產</button>
+                            </div>
+                            
+                            {formData.financialInsured.immovableHas === '有' && (
+                              <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                                <div>
+                                  <div className="flex justify-between items-end mb-2">
+                                    <label className="block text-sm font-bold text-gray-700 ml-1">不動產地址 <span className="text-red-500">*</span></label>
+                                    <button type="button" onClick={() => handleChange('financialInsured', 'immovableAddr', formData.insured.address)} className="text-xs bg-amber-100 text-amber-800 hover:bg-amber-200 px-3 py-1.5 rounded-full font-black transition-all shadow-sm active:scale-95 border border-amber-200">⚡ 同通訊地址</button>
+                                  </div>
+                                  <input required type="text" className={baseInputClass} value={formData.financialInsured.immovableAddr} onChange={e => handleChange('financialInsured', 'immovableAddr', e.target.value)} />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div><InputLabel required>大約坪數</InputLabel><input required type="number" className={baseInputClass} value={formData.financialInsured.immovableSize} onChange={e => handleChange('financialInsured', 'immovableSize', e.target.value)} /></div>
+                                  <div><InputLabel required>價值 (萬)</InputLabel><input required type="number" className={baseInputClass} value={formData.financialInsured.immovableValue} onChange={e => handleChange('financialInsured', 'immovableValue', e.target.value)} /></div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 要保人財務狀況 (如果同一人則顯示已帶入提示，不同人則顯示輸入框) */}
+                      {formData.sameAsInsured ? (
+                        <div className="bg-indigo-50/30 p-5 rounded-[2rem] border border-indigo-100 flex flex-col sm:flex-row items-center justify-between shadow-sm">
+                          <h3 className="font-black text-indigo-800 text-lg flex items-center mb-3 sm:mb-0">
+                            <div className="w-2.5 h-6 bg-indigo-500 rounded-full mr-3"></div>
+                            要保人財務狀況
+                          </h3>
+                          <span className="text-sm bg-indigo-100 text-indigo-700 px-4 py-2 rounded-full font-black shadow-sm flex items-center">
+                            <CheckCircle className="w-4 h-4 mr-1.5" /> 同被保險人 (已自動帶入)
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="bg-indigo-50/30 p-5 sm:p-6 rounded-[2rem] border border-indigo-100">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-5">
+                            <h3 className="font-black text-indigo-800 text-lg flex items-center mb-3 sm:mb-0">
+                              <div className="w-2.5 h-6 bg-indigo-500 rounded-full mr-3"></div>
+                              要保人財務狀況
+                            </h3>
+                            <button type="button" onClick={() => setFormData(prev => ({ ...prev, financialProposer: { ...prev.financialInsured } }))} className="text-sm bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-4 py-1.5 rounded-full font-black transition-all shadow-sm active:scale-95 border border-indigo-200">
+                              ⚡ 同被保人
+                            </button>
+                          </div>
+                          
+                          <div className="space-y-6">
+                            <div className="grid grid-cols-2 gap-4">
+                              <div><InputLabel required>年薪 (萬元)</InputLabel><input required type="number" className={baseInputClass} value={formData.financialProposer.income} onChange={e => handleChange('financialProposer', 'income', e.target.value)} /></div>
+                              <div><InputLabel required>負債 (萬元)</InputLabel><input required type="number" className={baseInputClass} value={formData.financialProposer.liabilities} onChange={e => handleChange('financialProposer', 'liabilities', e.target.value)} /></div>
+                            </div>
+
+                            <div>
+                              <InputLabel>動產狀況 (選填)</InputLabel>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="bg-white p-2 rounded-2xl border border-gray-200 shadow-sm flex items-center focus-within:ring-2 focus-within:ring-indigo-500/50 focus-within:border-indigo-500 transition-all">
+                                  <span className="text-sm font-black text-gray-500 w-16 text-center shrink-0">存款</span>
+                                  <input type="text" placeholder="EX：富邦銀行" className="flex-[2] w-full bg-transparent p-2 outline-none text-gray-700 border-r border-gray-100 placeholder:text-gray-300 font-medium" value={formData.financialProposer.depositBank} onChange={e => handleChange('financialProposer', 'depositBank', e.target.value)} />
+                                  <input type="number" placeholder="萬" className="flex-1 w-full bg-transparent p-2 outline-none text-gray-700 pl-3 placeholder:text-gray-300 font-medium" value={formData.financialProposer.depositAmount} onChange={e => handleChange('financialProposer', 'depositAmount', e.target.value)} />
+                                </div>
+                                <div className="bg-white p-2 rounded-2xl border border-gray-200 shadow-sm flex items-center focus-within:ring-2 focus-within:ring-indigo-500/50 focus-within:border-indigo-500 transition-all">
+                                  <span className="text-sm font-black text-gray-500 w-24 text-center shrink-0">股票/基金</span>
+                                  <input type="number" placeholder="總額(萬)" className="flex-1 w-full bg-transparent p-2 outline-none text-gray-700 placeholder:text-gray-300 font-medium" value={formData.financialProposer.stockAmount} onChange={e => handleChange('financialProposer', 'stockAmount', e.target.value)} />
+                                </div>
+                              </div>
+                            </div>
+
+                            <div>
+                              <InputLabel required>不動產狀況</InputLabel>
+                              <div className="flex gap-3 mb-4">
+                                <button type="button" onClick={() => handleChange('financialProposer', 'immovableHas', '無')} className={`flex-1 py-3.5 text-sm font-black rounded-xl transition-all shadow-sm active:scale-95 border border-transparent ${formData.financialProposer.immovableHas === '無' ? 'bg-gray-800 text-white' : 'bg-white text-gray-500 hover:bg-gray-100 border-gray-200'}`}>無不動產</button>
+                                <button type="button" onClick={() => handleChange('financialProposer', 'immovableHas', '有')} className={`flex-1 py-3.5 text-sm font-black rounded-xl transition-all shadow-sm active:scale-95 border border-transparent ${formData.financialProposer.immovableHas === '有' ? 'bg-indigo-600 text-white shadow-indigo-600/30' : 'bg-white text-gray-500 hover:bg-gray-100 border-gray-200'}`}>有不動產</button>
+                              </div>
+                              
+                              {formData.financialProposer.immovableHas === '有' && (
+                                <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                                  <div>
+                                    <div className="flex justify-between items-end mb-2">
+                                      <label className="block text-sm font-bold text-gray-700 ml-1">不動產地址 <span className="text-red-500">*</span></label>
+                                      <button type="button" onClick={() => handleChange('financialProposer', 'immovableAddr', formData.insured.address)} className="text-xs bg-amber-100 text-amber-800 hover:bg-amber-200 px-3 py-1.5 rounded-full font-black transition-all shadow-sm active:scale-95 border border-amber-200">⚡ 同通訊地址</button>
+                                    </div>
+                                    <input required type="text" className={baseInputClass} value={formData.financialProposer.immovableAddr} onChange={e => handleChange('financialProposer', 'immovableAddr', e.target.value)} />
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-4">
+                                    <div><InputLabel required>大約坪數</InputLabel><input required type="number" className={baseInputClass} value={formData.financialProposer.immovableSize} onChange={e => handleChange('financialProposer', 'immovableSize', e.target.value)} /></div>
+                                    <div><InputLabel required>價值 (萬)</InputLabel><input required type="number" className={baseInputClass} value={formData.financialProposer.immovableValue} onChange={e => handleChange('financialProposer', 'immovableValue', e.target.value)} /></div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* --- Step 4. 受益人資訊 --- */}
+                <div className={`step-container transition-opacity duration-300 ${currentStep === 4 ? 'opacity-100 block' : 'opacity-0 hidden'}`} data-step="4">
+                  <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100/80 p-6 sm:p-8">
+                    <div className="flex items-center mb-6 pb-5 border-b border-gray-100">
+                      <div className="bg-orange-50 p-3 rounded-2xl mr-4"><Users className="w-6 h-6 text-orange-600" /></div>
+                      <h2 className="text-xl font-black text-gray-800">受益人資訊</h2>
+                    </div>
+
+                    <div className="space-y-5">
+                      {formData.beneficiaries.map((b, index) => (
+                        <div key={b.key} className="bg-orange-50/30 p-5 sm:p-6 rounded-[2rem] border border-orange-100 relative group shadow-sm">
+                          {index > 0 && (
+                            <button type="button" onClick={() => removeBeneficiary(index)} className="absolute top-5 right-5 text-gray-400 hover:text-white hover:bg-red-500 bg-white p-2.5 rounded-full shadow-md border border-gray-100 transition-all active:scale-90">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          
+                          <div className="mb-5">
+                            <InputLabel>選擇順位</InputLabel>
+                            <select className="w-32 rounded-xl bg-orange-100 border border-orange-200 p-3 text-orange-800 font-black outline-none focus:ring-2 focus:ring-orange-300 transition-all shadow-sm" value={b.rank} onChange={e => updateBeneficiary(index, 'rank', e.target.value)}>
+                              {[1,2,3,4,5].map(r => <option key={r} value={r}>第 {r} 順位</option>)}
+                            </select>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                            <div><InputLabel required>姓名</InputLabel><input required type="text" className={baseInputClass} value={b.name} onChange={e => updateBeneficiary(index, 'name', e.target.value)} /></div>
+                            <div><InputLabel required>身分證字號</InputLabel><input required type="text" className={`${baseInputClass} uppercase font-medium`} value={b.uid} onChange={e => updateBeneficiary(index, 'uid', e.target.value)} /></div>
+                            <div className="sm:col-span-2"><InputLabel required>出生年月日</InputLabel><DateSelector section="beneficiaries" index={index} /></div>
+                            <div className="sm:col-span-2">
+                              <InputLabel required>與被保人關係</InputLabel>
+                              <select required className={baseInputClass} value={b.relation} onChange={e => updateBeneficiary(index, 'relation', e.target.value)}>
+                                <option value="" disabled>請選擇</option>
+                                {['配偶', '子女', '父母', '兄弟姊妹', '其他'].map(r => <option key={r} value={r}>{r}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+
+                      <button type="button" onClick={addBeneficiary} className="w-full py-4 border-2 border-dashed border-orange-300 text-orange-600 rounded-[2rem] font-black text-lg flex items-center justify-center hover:bg-orange-50 hover:border-orange-400 transition-all active:scale-95 shadow-sm">
+                        <Plus className="w-6 h-6 mr-2" /> 新增其他受益人
+                      </button>
+
+                      <div className="flex items-center bg-gray-100/80 p-4 rounded-2xl border border-gray-200 mt-2">
+                        <div className="bg-gray-800 text-white px-3 py-1.5 rounded-lg text-xs font-black mr-3 shadow-sm">最後順位</div>
+                        <div className="text-gray-700 font-bold text-sm">法定繼承人 <span className="text-gray-400 font-normal ml-1">(系統自動帶入)</span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* --- Step 5. 繳費扣款資訊 --- */}
+                <div className={`step-container transition-opacity duration-300 ${currentStep === 5 ? 'opacity-100 block' : 'opacity-0 hidden'}`} data-step="5">
+                  <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100/80 p-6 sm:p-8">
+                    <div className="flex items-center mb-8 pb-5 border-b border-gray-100">
+                      <div className="bg-teal-50 p-3 rounded-2xl mr-4"><CreditCard className="w-6 h-6 text-teal-600" /></div>
+                      <h2 className="text-xl font-black text-gray-800">繳費扣款資訊</h2>
+                    </div>
+
+                    <div className="space-y-8">
+                      <div>
+                        <InputLabel>請選擇繳費方式</InputLabel>
+                        <div className="flex flex-col sm:flex-row gap-4 mt-3">
+                          <label className={`flex-1 flex items-center justify-center p-5 rounded-2xl border-2 cursor-pointer transition-all shadow-sm active:scale-95 ${formData.payment.method === '銀行轉帳' ? 'border-teal-500 bg-teal-50 shadow-teal-500/20' : 'border-gray-200 hover:bg-gray-50'}`}>
+                            <input type="radio" className="w-5 h-5 text-teal-600 accent-teal-600 mr-3" checked={formData.payment.method === '銀行轉帳'} onChange={() => handleChange('payment', 'method', '銀行轉帳')} />
+                            <span className={`font-black text-lg ${formData.payment.method === '銀行轉帳' ? 'text-teal-800' : 'text-gray-500'}`}>銀行轉帳</span>
+                          </label>
+                          <label className={`flex-1 flex items-center justify-center p-5 rounded-2xl border-2 cursor-pointer transition-all shadow-sm active:scale-95 ${formData.payment.method === '信用卡支付' ? 'border-teal-500 bg-teal-50 shadow-teal-500/20' : 'border-gray-200 hover:bg-gray-50'}`}>
+                            <input type="radio" className="w-5 h-5 text-teal-600 accent-teal-600 mr-3" checked={formData.payment.method === '信用卡支付'} onChange={() => handleChange('payment', 'method', '信用卡支付')} />
+                            <span className={`font-black text-lg ${formData.payment.method === '信用卡支付' ? 'text-teal-800' : 'text-gray-500'}`}>信用卡支付</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="bg-gray-50/80 p-5 sm:p-7 rounded-[2rem] border border-gray-100 shadow-inner">
+                        {formData.payment.method === '銀行轉帳' ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 animate-in fade-in duration-300">
+                            <div><InputLabel required>扣款銀行 / 分行</InputLabel><input required type="text" placeholder="例: 012 台北富邦" className={`${baseInputClass} bg-white`} value={formData.payment.bankInfo} onChange={e => handleChange('payment', 'bankInfo', e.target.value)} /></div>
+                            <div><InputLabel required>扣款帳號</InputLabel><input required type="text" className={`${baseInputClass} bg-white font-medium`} value={formData.payment.bankAccount} onChange={e => handleChange('payment', 'bankAccount', e.target.value)} /></div>
+                          </div>
+                        ) : (
+                          <div className="space-y-6 animate-in fade-in duration-300">
+                            <div>
+                              <InputLabel required>信用卡卡號</InputLabel>
+                              <div className="flex items-center justify-between gap-1 sm:gap-2">
+                                <input id="card1" required type="text" inputMode="numeric" maxLength="4" className={cardInputClass} value={formData.payment.card1} onChange={e => handleCardChange(e, 1)} />
+                                <span className="text-gray-300 font-bold shrink-0">-</span>
+                                <input id="card2" required type="text" inputMode="numeric" maxLength="4" className={cardInputClass} value={formData.payment.card2} onChange={e => handleCardChange(e, 2)} />
+                                <span className="text-gray-300 font-bold shrink-0">-</span>
+                                <input id="card3" required type="text" inputMode="numeric" maxLength="4" className={cardInputClass} value={formData.payment.card3} onChange={e => handleCardChange(e, 3)} />
+                                <span className="text-gray-300 font-bold shrink-0">-</span>
+                                <input id="card4" required type="text" inputMode="numeric" maxLength="4" className={cardInputClass} value={formData.payment.card4} onChange={e => handleCardChange(e, 4)} />
+                              </div>
+                            </div>
+                            <div>
+                              <InputLabel required>有效期限 (MM/YY)</InputLabel>
+                              <div className="flex items-center gap-3">
+                                <select className={`${baseInputClass} bg-white flex-1 font-bold`} value={formData.payment.cardExpiryMM} onChange={e => handleChange('payment', 'cardExpiryMM', e.target.value)}>
+                                  {months.map(m => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                                <span className="text-gray-300 font-black text-2xl">/</span>
+                                <select className={`${baseInputClass} bg-white flex-1 font-bold`} value={formData.payment.cardExpiryYY} onChange={e => handleChange('payment', 'cardExpiryYY', e.target.value)}>
+                                  {Array.from({length: 15}, (_, i) => String(24 + i)).map(y => <option key={y} value={y}>{y}</option>)}
+                                </select>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* --- Step 6. 優惠與辦卡需求 & 確認送出區塊 --- */}
+                <div className={`step-container transition-opacity duration-300 ${currentStep === 6 ? 'opacity-100 block' : 'opacity-0 hidden'}`} data-step="6">
+                  <div className="bg-gradient-to-b from-blue-900 to-indigo-950 rounded-[2rem] shadow-2xl p-8 sm:p-10 text-center relative overflow-hidden border border-blue-800">
+                    {/* 背景裝飾 */}
+                    <div className="absolute top-0 right-0 -mt-10 -mr-10 w-48 h-48 bg-blue-400/20 rounded-full blur-3xl"></div>
+                    <div className="absolute bottom-0 left-0 -mb-10 -ml-10 w-48 h-48 bg-indigo-500/20 rounded-full blur-3xl"></div>
+
+                    <div className="relative z-10">
+                      <div className="bg-gradient-to-br from-yellow-300 to-yellow-500 w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-yellow-500/30 border border-yellow-200">
+                        <Gift className="w-10 h-10 text-blue-900" />
+                      </div>
+                      <h2 className="text-2xl sm:text-3xl font-black text-white mb-4 tracking-wide">專屬優惠與辦卡需求</h2>
+                      
+                      <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 mb-8 border border-white/10 shadow-inner">
+                        <p className="text-blue-50 leading-relaxed text-base sm:text-lg font-medium">
+                          使用富邦信用卡繳保費，可享 <strong className="text-yellow-300 text-xl mx-1 font-black drop-shadow-md">1% 折扣</strong> 
+                          及 <strong className="text-yellow-300 text-xl mx-1 font-black drop-shadow-md">5 萬以上 12 期零利率</strong>。
+                        </p>
                       </div>
                       
-                      <div className="space-y-2">
-                        <label className="block text-sm font-bold text-gray-700">聯絡地址 *</label>
-                        <button onClick={() => updateNestedState('proposer', 'contactAddress', formData.insured.address)} className="w-full bg-orange-100 text-orange-700 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all h-12">
-                          <MapPin className="w-4 h-4" /> 同被保險人通訊地址
+                      <div className="bg-white rounded-[2rem] p-6 sm:p-8 shadow-2xl">
+                        <h3 className="font-black text-gray-800 mb-6 text-lg">是否需要專員協助辦理新卡？</h3>
+                        <div className="flex flex-col sm:flex-row gap-4 mb-2">
+                          <label className={`flex-1 py-5 text-center rounded-2xl border-2 cursor-pointer transition-all shadow-sm active:scale-95 ${formData.needNewCard === '是' ? 'border-blue-600 bg-blue-600 text-white font-black shadow-blue-600/30' : 'border-gray-200 text-gray-500 hover:bg-gray-50 font-bold'}`}>
+                            <input type="radio" name="needCard" className="hidden" checked={formData.needNewCard === '是'} onChange={() => setFormData({...formData, needNewCard: '是'})} />
+                            ✨ 是，請協助辦理
+                          </label>
+                          <label className={`flex-1 py-5 text-center rounded-2xl border-2 cursor-pointer transition-all shadow-sm active:scale-95 ${formData.needNewCard === '否' ? 'border-gray-800 bg-gray-800 text-white font-black shadow-gray-800/30' : 'border-gray-200 text-gray-500 hover:bg-gray-50 font-bold'}`}>
+                            <input type="radio" name="needCard" className="hidden" checked={formData.needNewCard === '否'} onChange={() => setFormData({...formData, needNewCard: '否'})} />
+                            暫不需要
+                          </label>
+                        </div>
+                      </div>
+                      
+                      {/* 大面積醒目確認送出按鈕 (Step 6 限定) - 注意此處改為 type="button" 阻斷預設跳轉 */}
+                      <div className="mt-8">
+                        <button 
+                          type="button" 
+                          onClick={handleManualSubmit}
+                          disabled={isSubmitting}
+                          className={`w-full py-5 rounded-[2rem] text-xl font-black text-white shadow-2xl transition-all flex justify-center items-center ${
+                            isSubmitting ? 'bg-gray-500 cursor-not-allowed opacity-80' : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 active:scale-[0.98] shadow-green-500/40 ring-4 ring-green-500/20'
+                          }`}
+                        >
+                          {isSubmitting ? '資料傳送中...' : <><Send className="w-6 h-6 mr-3"/> 確認無誤並送出表單</>}
                         </button>
-                        <input type="text" value={formData.proposer.contactAddress} onChange={(e) => updateNestedState('proposer', 'contactAddress', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl h-12" placeholder="請輸入聯絡地址" />
+                        <p className="text-blue-200/60 text-xs mt-4">點擊送出即代表您同意本表單之隱私聲明</p>
                       </div>
 
-                      <div className="space-y-2 mt-4">
-                        <label className="block text-sm font-bold text-gray-700">收費地址 *</label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button onClick={() => updateNestedState('proposer', 'billingAddress', formData.insured.address)} className="bg-orange-100 text-orange-700 py-3 rounded-xl font-bold text-[11px] flex items-center justify-center h-12">同被保人</button>
-                          <button onClick={() => updateNestedState('proposer', 'billingAddress', formData.proposer.contactAddress)} className="bg-blue-100 text-blue-700 py-3 rounded-xl font-bold text-[11px] flex items-center justify-center h-12">同要保人</button>
-                        </div>
-                        <input type="text" value={formData.proposer.billingAddress} onChange={(e) => updateNestedState('proposer', 'billingAddress', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl h-12" placeholder="請輸入收費地址" />
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-4 pt-2">
-                        <input type="text" value={formData.proposer.workPlace} onChange={(e) => updateNestedState('proposer', 'workPlace', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="公司/學校" />
-                        <input type="text" value={formData.proposer.jobTitle} onChange={(e) => updateNestedState('proposer', 'jobTitle', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="職稱" />
-                      </div>
                     </div>
-                  ) : <div className="py-24 text-center bg-blue-50 rounded-3xl border-2 border-dashed border-blue-200 font-bold text-blue-700">資料已同步為本人</div>}
-                </div>
-              )}
-
-              {step === 3 && (
-                <FinancialForm 
-                  title="3. 被保人財務" 
-                  category="financialInsured" 
-                  data={formData.financialInsured} 
-                  defaultAddress={formData.insured.address} 
-                  updateNestedState={updateNestedState}
-                  handleNumericChange={handleNumericChange}
-                />
-              )}
-              {step === 4 && (
-                <FinancialForm 
-                  title="4. 要保人財務" 
-                  category="financialProposer" 
-                  data={formData.financialProposer} 
-                  defaultAddress={formData.proposer.contactAddress} 
-                  updateNestedState={updateNestedState}
-                  handleNumericChange={handleNumericChange}
-                  onSync={() => setFormData(prev => ({...prev, financialProposer: {...prev.financialInsured, sameAsInsured: !prev.financialProposer.sameAsInsured}}))} 
-                />
-              )}
-
-              {step === 5 && (
-                <div className="space-y-6 animate-in fade-in">
-                  <div className="flex items-center gap-2 mb-4 text-blue-800 font-black text-lg"><Users className="text-blue-600"/> 5. 受益人資訊</div>
-                  {formData.beneficiaries.map((b, idx) => (
-                    <div key={idx} className="p-4 border border-blue-100 rounded-2xl bg-blue-50/30 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                           <span className="text-xs font-bold text-blue-600">指定順位:</span>
-                           <select 
-                             value={b.rank} 
-                             onChange={(e) => { const n = [...formData.beneficiaries]; n[idx].rank = e.target.value; setFormData(prev => ({...prev, beneficiaries: n})) }}
-                             className="border rounded px-2 py-1 text-sm bg-white font-bold"
-                           >
-                             {[1,2,3,4,5,6,7,8,9].map(num => <option key={num} value={num.toString()}>{num}</option>)}
-                           </select>
-                        </div>
-                        {idx > 0 && <button onClick={() => setFormData(prev => ({...prev, beneficiaries: prev.beneficiaries.filter((_, i) => i !== idx)}))} className="text-red-500 underline text-xs font-bold">移除</button>}
-                      </div>
-                      <input type="text" value={b.name} onChange={(e) => { const n = [...formData.beneficiaries]; n[idx].name = e.target.value; setFormData(prev => ({...prev, beneficiaries: n})) }} className="w-full p-2.5 border rounded-xl h-12" placeholder="姓名 *" />
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        <BirthdayPicker category="beneficiary" data={b} updateNestedState={updateNestedState} setFormData={setFormData} beneficiaries={formData.beneficiaries} idx={idx} />
-                        <input type="text" value={b.id} onChange={(e) => { const n = [...formData.beneficiaries]; n[idx].id = e.target.value; setFormData(prev => ({...prev, beneficiaries: n})) }} className="w-full p-2.5 border rounded-xl h-12" placeholder="身分證" />
-                      </div>
-                    </div>
-                  ))}
-                  <button onClick={() => setFormData(prev => ({...prev, beneficiaries: [...prev.beneficiaries, {rank: (prev.beneficiaries.length+1).toString(), name:'', id:'', birthdayY:'1990', birthdayM:'1', birthdayD:'1', relation: '子女'}]}))} className="w-full py-4 border-2 border-dashed border-gray-200 rounded-xl text-gray-400 font-bold">+ 新增受益人</button>
-                </div>
-              )}
-
-              {step === 6 && (
-                <div className="space-y-6 animate-in fade-in">
-                  <div className="flex items-center gap-2 mb-4 text-blue-800 font-black text-lg"><CreditCard className="text-blue-600"/> 6. 繳費資訊</div>
-                  <div className="flex gap-2">
-                    {['銀行轉帳', '信用卡支付'].map(m => (<button key={m} onClick={() => setFormData(prev => ({...prev, paymentMethod: m}))} className={`flex-1 py-4 rounded-xl font-black h-14 ${formData.paymentMethod === m ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400'}`}>{m}</button>))}
                   </div>
-                  {formData.paymentMethod === '銀行轉帳' ? (
-                    <div className="space-y-3">
-                      <input type="text" value={formData.bankInfo} onChange={(e) => setFormData(prev => ({...prev, bankInfo: e.target.value}))} className="w-full p-3 border rounded-xl h-12" placeholder="扣款銀行/分行 (例如：富邦銀行 / 民生分行)" />
-                      <input type="text" value={formData.bankAccount} onChange={(e) => setFormData(prev => ({...prev, bankAccount: e.target.value}))} className="w-full p-3 border rounded-xl h-12" placeholder="扣款帳號" />
-                    </div>
+                </div>
+
+                {/* 手機版懸浮底部導覽列 (毛玻璃效果) - 當處於最後一頁時隱藏送出按鈕以防重複 */}
+                <div className={`fixed bottom-0 left-0 w-full bg-white/80 backdrop-blur-xl border-t border-gray-200/50 p-4 pb-[env(safe-area-inset-bottom,1rem)] z-50 md:relative md:bg-transparent md:backdrop-blur-none md:border-none md:p-0 md:mt-10 flex justify-between gap-3 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] md:shadow-none ${currentStep === 6 ? 'hidden md:flex' : 'flex'}`}>
+                  <button 
+                    type="button" 
+                    onClick={currentStep === 1 ? undefined : prevStep}
+                    className={`w-14 sm:w-auto sm:flex-1 py-4 sm:px-6 rounded-2xl font-black transition-all flex justify-center items-center shadow-sm ${
+                      currentStep === 1 ? 'opacity-0 pointer-events-none' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-gray-900 active:scale-95'
+                    }`}
+                  >
+                    <ChevronLeft className="w-6 h-6 sm:mr-1" /> <span className="hidden sm:inline">返回上一步</span>
+                  </button>
+
+                  {currentStep < totalSteps ? (
+                    <button 
+                      type="button" 
+                      onClick={nextStep}
+                      className="flex-[3] py-4 rounded-2xl text-lg font-black text-white bg-blue-600 hover:bg-blue-500 active:bg-blue-700 shadow-xl shadow-blue-600/30 transition-all flex justify-center items-center active:scale-95"
+                    >
+                      下一步 <ChevronRight className="w-5 h-5 ml-1" />
+                    </button>
                   ) : (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-4 gap-2">
-                        {[0,1,2,3].map(i => <input key={i} ref={cardRefs[i]} type="tel" maxLength="4" value={formData.cardNumbers[i]} onChange={(e) => handleCardNumberChange(i, e.target.value)} className="w-full p-3 border rounded-xl text-center font-black h-12" placeholder="0000" />)}
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="w-24">
-                          <label className="block text-[10px] text-gray-400 font-bold">月份 (MM)</label>
-                          <input ref={expiryMMRef} type="tel" maxLength="2" value={formData.cardExpiryMM} onChange={(e) => handleExpiryChange('cardExpiryMM', e.target.value)} className="w-full p-3 border rounded-xl text-center font-black h-12" placeholder="01" />
-                        </div>
-                        <span className="mt-5">/</span>
-                        <div className="w-24">
-                          <label className="block text-[10px] text-gray-400 font-bold">年份 (YY)</label>
-                          <input ref={expiryYYRef} type="tel" maxLength="2" value={formData.cardExpiryYY} onChange={(e) => handleExpiryChange('cardExpiryYY', e.target.value)} className="w-full p-3 border rounded-xl text-center font-black h-12" placeholder="28" />
-                        </div>
-                      </div>
+                    <div className="flex-[3] hidden md:block">
+                       {/* 電腦版才顯示佔位符，因為手機版按鈕已藏 */}
                     </div>
                   )}
                 </div>
-              )}
-
-              {step === 7 && (
-                <div className="space-y-6 text-center animate-in fade-in">
-                  <div className="bg-gradient-to-br from-blue-800 to-blue-900 p-8 rounded-3xl text-white shadow-xl relative overflow-hidden">
-                    <div className="relative z-10">
-                      <p className="font-black text-xl mb-4">富邦卡友專屬優惠</p>
-                      <p className="text-sm opacity-90 leading-relaxed">指定險種 1% 折扣<br />單筆保費滿 5 萬享 12 期 0 利率</p>
-                    </div>
-                    <CreditCard className="absolute -right-8 -bottom-8 w-40 h-40 text-white/10 rotate-12" />
-                  </div>
-                  <p className="font-black text-gray-700 mt-6 text-lg">是否順便辦理新信用卡？</p>
-                  <div className="flex justify-center gap-10 mt-4 items-center">
-                    {['是', '否'].map(c => (
-                      <label key={c} className="flex flex-col items-center gap-2 cursor-pointer group">
-                        <input type="radio" checked={formData.needNewCard === c} onChange={() => setFormData(prev => ({...prev, needNewCard: c}))} className="w-7 h-7 text-blue-600" />
-                        <span className={`font-black text-lg ${formData.needNewCard === c ? 'text-blue-600 scale-125' : 'text-gray-300'}`}>{c}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="mt-12 flex gap-4">
-                {step > 1 && <button onClick={() => setStep(step - 1)} className="flex-1 border-2 p-4 rounded-2xl font-black text-gray-400 hover:bg-gray-50 h-14">上一步</button>}
-                <button 
-                  onClick={() => step < 7 ? setStep(step + 1) : handleSubmit()} 
-                  disabled={loading || !isStepValid()} 
-                  className={`flex-[2] text-white p-4 rounded-2xl font-black shadow-xl transition-all h-14 flex items-center justify-center gap-2 ${!isStepValid() ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
-                >
-                  {loading ? '處理中...' : (step < 7 ? (isStepValid() ? '下一步' : '請填完必填項目') : '確認送出資料')}
-                </button>
-              </div>
-              {message && <p className="text-red-500 text-center mt-6 text-sm font-black animate-bounce">{message}</p>}
-            </div>
-          </>
-        ) : (
-          <div className="bg-white rounded-2xl shadow-md p-6 animate-in fade-in">
-            <div className="flex justify-between items-center mb-8 border-b pb-4">
-              <h2 className="text-xl font-black text-gray-800 flex items-center gap-2"><Database className="text-blue-600" /> 管理後台</h2>
-              <div className="flex gap-2">
-                <button onClick={exportToCSV} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md hover:bg-green-700 transition-colors"><FileSpreadsheet className="w-4 h-4" /> 匯出 CSV</button>
-                <button onClick={() => setShowAdmin(false)} className="text-gray-500 font-bold bg-gray-100 px-4 py-2 rounded-xl text-sm">離開</button>
-              </div>
-            </div>
-            <div className="space-y-3">
-              {submissions.length === 0 ? <p className="text-center py-20 text-gray-400 font-medium">目前尚無提交資料。</p> : 
-                submissions.map(sub => (
-                  <div key={sub.id} className="border-b border-gray-100 py-4 hover:bg-gray-50 px-2 rounded-lg">
-                    <div className="flex justify-between items-center">
-                        <p className="font-black text-gray-800">{sub.insured?.name} <span className="text-xs font-normal text-gray-400 ml-2">{sub.submittedAt ? new Date(sub.submittedAt).toLocaleString() : ''}</span></p>
-                        <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">{sub.paymentMethod}</span>
-                    </div>
-                    <details className="mt-2">
-                      <summary className="text-xs text-blue-500 cursor-pointer font-bold">查看 JSON</summary>
-                      <pre className="text-[10px] bg-gray-900 text-blue-300 p-4 mt-2 rounded-xl overflow-auto">{JSON.stringify(sub, null, 2)}</pre>
-                    </details>
-                  </div>
-                ))
-              }
-            </div>
+                
+              </form>
+            )}
           </div>
-        )}
-      </main>
+        </div>
+      );
+    };
 
-      <style>{`
-        .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
-        input, select, textarea { font-size: 16px !important; outline: none; }
-        @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
-        .animate-bounce { animation: bounce 2s infinite; }
-      `}</style>
-    </div>
-  );
-}
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
