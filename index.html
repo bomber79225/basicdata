@@ -1,0 +1,707 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
+import { 
+  User, 
+  CreditCard, 
+  DollarSign, 
+  Users, 
+  ChevronRight, 
+  ChevronLeft, 
+  CheckCircle, 
+  ShieldCheck, 
+  Info, 
+  Database, 
+  ArrowRightLeft, 
+  MapPin, 
+  Home, 
+  Lock,
+  Download,
+  FileSpreadsheet
+} from 'lucide-react';
+
+// --- 配置區 ---
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxDWZQen5xtW0IbTb7B_QJRi96Ho-6fJPPln2M2snQhgTV33b2k0pOEizMV7q-xGW5i/exec"; 
+
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'insurance-form-app';
+
+// --- 靜態資料 ---
+const getYearOptions = () => {
+  const currentYear = new Date().getFullYear();
+  const years = [];
+  for (let i = currentYear; i >= currentYear - 100; i--) years.push(i);
+  return years;
+};
+const yearsArr = getYearOptions();
+const months = Array.from({ length: 12 }, (_, i) => i + 1);
+const days = Array.from({ length: 31 }, (_, i) => i + 1);
+const relationOptions = ['本人', '配偶', '子女', '父母', '兄弟姊妹', '其他'];
+
+// --- 子組件移至外部以解決卡頓問題 ---
+
+const BirthdayPicker = ({ category, data, updateNestedState, beneficiaries, setFormData, idx = null }) => (
+  <div className="grid grid-cols-3 gap-1">
+    <select 
+      value={data.birthdayY} 
+      onChange={(e) => {
+        if (idx !== null) {
+          const newB = [...beneficiaries]; newB[idx].birthdayY = e.target.value; setFormData(prev => ({...prev, beneficiaries: newB}));
+        } else updateNestedState(category, 'birthdayY', e.target.value);
+      }} 
+      className="p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-100 h-11"
+    >
+      {yearsArr.map(y => <option key={y} value={y}>{y} 年</option>)}
+    </select>
+    <select 
+      value={data.birthdayM} 
+      onChange={(e) => {
+        if (idx !== null) {
+          const newB = [...beneficiaries]; newB[idx].birthdayM = e.target.value; setFormData(prev => ({...prev, beneficiaries: newB}));
+        } else updateNestedState(category, 'birthdayM', e.target.value);
+      }} 
+      className="p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-100 h-11"
+    >
+      {months.map(m => <option key={m} value={m}>{m} 月</option>)}
+    </select>
+    <select 
+      value={data.birthdayD} 
+      onChange={(e) => {
+        if (idx !== null) {
+          const newB = [...beneficiaries]; newB[idx].birthdayD = e.target.value; setFormData(prev => ({...prev, beneficiaries: newB}));
+        } else updateNestedState(category, 'birthdayD', e.target.value);
+      }} 
+      className="p-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-100 h-11"
+    >
+      {days.map(d => <option key={d} value={d}>{d} 日</option>)}
+    </select>
+  </div>
+);
+
+const FinancialForm = ({ title, category, data, defaultAddress, updateNestedState, handleNumericChange, onSync = null }) => (
+  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+    <div className="flex flex-col gap-3 mb-2">
+      <div className="flex items-center gap-2 text-blue-800 font-black text-lg">
+        <DollarSign className="text-blue-600"/> {title}
+      </div>
+      {onSync && (
+        <button onClick={onSync} className="w-full bg-orange-500 text-white py-3 rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-transform h-12">
+          <ArrowRightLeft className="w-4 h-4" /> 同被保險人財務資料
+        </button>
+      )}
+    </div>
+    <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex gap-3 items-start">
+      <Info className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+      <p className="text-[11px] text-amber-800 font-bold">金額、坪數若無請填「0」。資料受安全加密保護。</p>
+    </div>
+
+    {!data.sameAsInsured || !category.includes('Proposer') ? (
+      <div className="space-y-5">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">大約年薪 (萬) *</label>
+            <input 
+              type="text" 
+              inputMode="numeric"
+              value={data.income} 
+              onChange={(e) => handleNumericChange(category, 'income', e.target.value)} 
+              className="w-full p-3 border border-gray-200 rounded-xl h-12 font-bold no-spinner" 
+              placeholder="若無填0" 
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">大約負債 (萬) *</label>
+            <input 
+              type="text" 
+              inputMode="numeric"
+              value={data.liabilities} 
+              onChange={(e) => handleNumericChange(category, 'liabilities', e.target.value)} 
+              className="w-full p-3 border border-gray-200 rounded-xl h-12 font-bold no-spinner" 
+              placeholder="若無填0" 
+            />
+          </div>
+        </div>
+        <div className="p-5 bg-slate-50 rounded-2xl border border-gray-100 space-y-4">
+          <label className="block text-sm font-bold text-blue-800">動產明細 *</label>
+          <div className="flex gap-6 mb-1">
+            {['存款', '股票/基金'].map(t => (
+              <label key={t} className="flex items-center gap-2 cursor-pointer text-sm font-bold text-gray-600">
+                <input type="radio" checked={data.movableType === t} onChange={() => updateNestedState(category, 'movableType', t)} className="w-4 h-4 text-blue-600" /> {t}
+              </label>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {data.movableType === '存款' && (
+              <input 
+                type="text" 
+                value={data.bankName} 
+                onChange={(e) => updateNestedState(category, 'bankName', e.target.value)} 
+                className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12" 
+                placeholder="存款銀行名稱" 
+              />
+            )}
+            <input 
+              type="text" 
+              inputMode="numeric"
+              value={data.movableAmount} 
+              onChange={(e) => handleNumericChange(category, 'movableAmount', e.target.value)} 
+              className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12 font-bold" 
+              placeholder={data.movableType === '存款' ? "存款總額 (萬)" : "股票總額 (萬)"} 
+            />
+          </div>
+        </div>
+        <div className="p-5 bg-blue-50/50 rounded-2xl border border-blue-100 space-y-4">
+          <label className="block text-sm font-bold text-blue-800">不動產狀況 *</label>
+          <select value={data.immovableHas} onChange={(e) => updateNestedState(category, 'immovableHas', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl text-sm bg-white font-bold h-12">
+            <option value="無">無不動產</option>
+            <option value="有">有不動產</option>
+          </select>
+          {data.immovableHas === '有' && (
+            <div className="animate-in slide-in-from-top-2 duration-300 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 mb-1">大約坪數</label>
+                  <input 
+                    type="text" 
+                    inputMode="numeric"
+                    value={data.immovableSize} 
+                    onChange={(e) => handleNumericChange(category, 'immovableSize', e.target.value)} 
+                    className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12 font-bold" 
+                    placeholder="坪數" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 mb-1">大約價值 (萬)</label>
+                  <input 
+                    type="text" 
+                    inputMode="numeric"
+                    value={data.immovableValue} 
+                    onChange={(e) => handleNumericChange(category, 'immovableValue', e.target.value)} 
+                    className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12 font-bold" 
+                    placeholder="價值(萬)" 
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="block text-[10px] font-bold text-gray-500">不動產詳細地址</label>
+                <button 
+                  onClick={() => updateNestedState(category, 'immovableAddr', defaultAddress)} 
+                  className="w-full bg-blue-100 text-blue-700 py-2.5 rounded-xl text-xs font-black flex items-center justify-center gap-1 active:scale-95 transition-transform"
+                >
+                  <MapPin className="w-3 h-3" /> 同上方通訊地址
+                </button>
+                <input type="text" value={data.immovableAddr} onChange={(e) => updateNestedState(category, 'immovableAddr', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl text-sm h-12" placeholder="請輸入地址" />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    ) : (
+      <div className="py-16 text-center bg-blue-50 rounded-3xl border-2 border-dashed border-blue-200">
+        <p className="text-blue-800 font-black">已同步被保人資料</p>
+      </div>
+    )}
+  </div>
+);
+
+// --- 主應用程式 ---
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [step, setStep] = useState(1);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [submissions, setSubmissions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  const cardRefs = [useRef(), useRef(), useRef(), useRef()];
+  const expiryMMRef = useRef();
+  const expiryYYRef = useRef();
+
+  const [formData, setFormData] = useState({
+    insured: {
+      name: '', birthdayY: '1990', birthdayM: '1', birthdayD: '1', id: '', phone: '', address: '', email: '',
+      height: '', weight: '', workPlace: '', jobTitle: '', jobContent: '', medicalHistory: ''
+    },
+    sameAsInsured: false,
+    proposer: {
+      name: '', birthdayY: '1990', birthdayM: '1', birthdayD: '1', id: '', phone: '', 
+      relation: '配偶', relationOther: '',
+      contactAddress: '', billingAddress: '',
+      workPlace: '', jobTitle: '', jobContent: ''
+    },
+    financialInsured: {
+      income: '', liabilities: '', movableType: '存款', bankName: '', movableAmount: '', 
+      immovableHas: '無', immovableAddr: '', immovableSize: '', immovableValue: ''
+    },
+    financialProposer: {
+      sameAsInsured: false, income: '', liabilities: '', movableType: '存款', bankName: '', movableAmount: '', 
+      immovableHas: '無', immovableAddr: '', immovableSize: '', immovableValue: ''
+    },
+    beneficiaries: [
+      { rank: '1', name: '', id: '', birthdayY: '1990', birthdayM: '1', birthdayD: '1', relation: '配偶', relationOther: '' }
+    ],
+    paymentMethod: '銀行轉帳',
+    bankInfo: '', bankAccount: '', 
+    cardNumbers: ['', '', '', ''], cardExpiryMM: '', cardExpiryYY: '',
+    needNewCard: '否'
+  });
+
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user || !showAdmin) return;
+    const q = collection(db, 'artifacts', appId, 'public', 'data', 'submissions');
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setSubmissions(data);
+    }, (err) => console.error("Snapshot error:", err));
+    return () => unsubscribe();
+  }, [user, showAdmin]);
+
+  const updateNestedState = useCallback((category, field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      [category]: { ...prev[category], [field]: value }
+    }));
+  }, []);
+
+  const handleNumericChange = useCallback((category, field, value) => {
+    const cleanedValue = value.replace(/\D/g, '');
+    updateNestedState(category, field, cleanedValue);
+  }, [updateNestedState]);
+
+  const handleCopyInsuredToProposer = () => {
+    setFormData(prev => ({
+      ...prev,
+      sameAsInsured: !prev.sameAsInsured,
+      proposer: !prev.sameAsInsured ? { 
+        ...prev.proposer,
+        name: prev.insured.name,
+        birthdayY: prev.insured.birthdayY,
+        birthdayM: prev.insured.birthdayM,
+        birthdayD: prev.insured.birthdayD,
+        id: prev.insured.id,
+        phone: prev.insured.phone,
+        contactAddress: prev.insured.address,
+        billingAddress: prev.insured.address,
+        workPlace: prev.insured.workPlace,
+        jobTitle: prev.insured.jobTitle,
+        jobContent: prev.insured.jobContent,
+        relation: '本人'
+      } : prev.proposer
+    }));
+  };
+
+  const handleAdminToggle = () => {
+    if (!showAdmin) {
+      const pwd = prompt("請輸入管理員查看密碼：");
+      if (pwd === "8888") setShowAdmin(true);
+      else if (pwd !== null) alert("密碼錯誤");
+    } else setShowAdmin(false);
+  };
+
+  const exportToCSV = () => {
+    if (submissions.length === 0) return;
+    const headers = ["提交時間", "被保人姓名", "身分證", "電話", "要保人姓名", "關係", "支付方式"];
+    const csvRows = [headers.join(",")];
+    submissions.forEach(sub => {
+      const row = [
+        `"${sub.submittedAt}"`, `"${sub.insured.name}"`, `"${sub.insured.id}"`,
+        `"${sub.insured.phone}"`, `"${sub.proposer.name}"`, `"${sub.proposer.relation}"`, `"${sub.paymentMethod}"`
+      ];
+      csvRows.push(row.join(","));
+    });
+    const csvString = "\ufeff" + csvRows.join("\n");
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `資料彙總_${new Date().toLocaleDateString()}.csv`;
+    link.click();
+  };
+
+  const handleCardNumberChange = (index, value) => {
+    const val = value.replace(/\D/g, '').slice(0, 4);
+    const newNums = [...formData.cardNumbers];
+    newNums[index] = val;
+    setFormData(prev => ({ ...prev, cardNumbers: newNums }));
+    if (val.length === 4 && index < 3) cardRefs[index + 1].current.focus();
+  };
+
+  const handleExpiryChange = (field, value) => {
+    const val = value.replace(/\D/g, '').slice(0, 2);
+    setFormData(prev => ({ ...prev, [field]: val }));
+    if (field === 'cardExpiryMM' && val.length === 2) expiryYYRef.current.focus();
+  };
+
+  const handleSubmit = async () => {
+    if (!user) return;
+    if (formData.beneficiaries.length === 0 || !formData.beneficiaries[0].name) {
+      setMessage("請至少填寫一位受益人姓名");
+      return;
+    }
+    setLoading(true);
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'), {
+        ...formData,
+        submittedAt: new Date().toISOString(),
+        userId: user.uid
+      });
+      if (GOOGLE_SCRIPT_URL) {
+        await fetch(GOOGLE_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors', 
+          cache: 'no-cache',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formData)
+        });
+      }
+      setIsSubmitted(true);
+    } catch (error) {
+      setMessage("儲存失敗");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const steps = [
+    { id: 1, title: '被保人' },
+    { id: 2, title: '要保人' },
+    { id: 3, title: '被保財務' },
+    { id: 4, title: '要保財務' },
+    { id: 5, title: '受益人' },
+    { id: 6, title: '支付' },
+    { id: 7, title: '需求' }
+  ];
+
+  // 驗證當前頁面是否可進入下一步
+  const isStepValid = () => {
+    if (step === 3) {
+      const f = formData.financialInsured;
+      return f.income !== '' && f.liabilities !== '' && f.movableAmount !== '';
+    }
+    if (step === 4) {
+      if (formData.financialProposer.sameAsInsured) return true;
+      const f = formData.financialProposer;
+      return f.income !== '' && f.liabilities !== '' && f.movableAmount !== '';
+    }
+    return true;
+  };
+
+  if (isSubmitted) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4 text-center">
+        <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-10 border border-gray-100">
+          <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-6" />
+          <h2 className="text-2xl font-bold text-gray-800 mb-3">資料已成功送出</h2>
+          <p className="text-gray-500 mb-8">我們已收到您的投保資料，專員將盡快聯繫您。</p>
+          <button onClick={() => window.location.reload()} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-lg hover:bg-blue-700 transition-all">返回首頁</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-16 font-sans">
+      <header className="bg-blue-800 text-white py-6 px-4 shadow-xl sticky top-0 z-50">
+        <div className="max-w-2xl mx-auto flex justify-between items-center">
+          <div>
+            <h1 className="text-xl font-black tracking-tight flex items-center gap-2"><ShieldCheck className="text-blue-300" /> 投保所需基本資料</h1>
+            <p className="text-blue-200 text-[10px] font-medium tracking-widest mt-0.5 uppercase tracking-wider">Security & Confidentiality</p>
+          </div>
+          <button onClick={handleAdminToggle} className="p-2.5 bg-blue-700 rounded-xl h-11 w-11 flex items-center justify-center transition-colors hover:bg-blue-600"><Database className="w-5 h-5" /></button>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 mt-6">
+        {!showAdmin ? (
+          <>
+            <div className="flex justify-between mb-8 overflow-x-auto py-3 no-scrollbar bg-white px-4 rounded-2xl shadow-sm border border-gray-100">
+              {steps.map((s) => (
+                <button key={s.id} onClick={() => { if (s.id <= step || isStepValid()) setStep(s.id); }} className="flex flex-col items-center min-w-[65px] group">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-black transition-all ${step === s.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : step > s.id ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                    {step > s.id ? <CheckCircle className="w-5 h-5" /> : s.id}
+                  </div>
+                  <span className={`text-[10px] mt-2 font-bold ${step === s.id ? 'text-blue-600' : 'text-gray-400'}`}>{s.title}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="bg-white rounded-3xl shadow-xl p-6 md:p-10 border border-gray-50">
+              {step === 1 && (
+                <div className="space-y-5 animate-in fade-in">
+                   <div className="flex items-center gap-2 mb-4 text-blue-800 font-black text-lg"><User className="text-blue-600"/> 1. 被保人資料</div>
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                     <input type="text" value={formData.insured.name} onChange={(e) => updateNestedState('insured', 'name', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="姓名 *" />
+                     <input type="text" value={formData.insured.id} onChange={(e) => updateNestedState('insured', 'id', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="身分證 *" />
+                   </div>
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                     <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">出生年月日 *</label>
+                        <BirthdayPicker category="insured" data={formData.insured} updateNestedState={updateNestedState} setFormData={setFormData} />
+                     </div>
+                     <div><label className="block text-xs font-bold text-gray-500 mb-1">手機 *</label><input type="tel" value={formData.insured.phone} onChange={(e) => updateNestedState('insured', 'phone', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="09XX-XXX-XXX" /></div>
+                   </div>
+                   <div className="grid grid-cols-2 gap-4">
+                     <input 
+                       type="text" 
+                       inputMode="numeric"
+                       value={formData.insured.height} 
+                       onChange={(e) => handleNumericChange('insured', 'height', e.target.value)} 
+                       className="w-full p-3 border rounded-xl h-12 font-bold" 
+                       placeholder="身高 (cm) *" 
+                     />
+                     <input 
+                       type="text" 
+                       inputMode="numeric"
+                       value={formData.insured.weight} 
+                       onChange={(e) => handleNumericChange('insured', 'weight', e.target.value)} 
+                       className="w-full p-3 border rounded-xl h-12 font-bold" 
+                       placeholder="體重 (kg) *" 
+                     />
+                   </div>
+                   <input type="email" value={formData.insured.email} onChange={(e) => updateNestedState('insured', 'email', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="Email" />
+                   <input type="text" value={formData.insured.address} onChange={(e) => updateNestedState('insured', 'address', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="通訊地址" />
+                   <div className="grid grid-cols-2 gap-4">
+                     <input type="text" value={formData.insured.workPlace} onChange={(e) => updateNestedState('insured', 'workPlace', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="公司/學校" />
+                     <input type="text" value={formData.insured.jobTitle} onChange={(e) => updateNestedState('insured', 'jobTitle', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="職稱" />
+                   </div>
+                   <textarea value={formData.insured.jobContent} onChange={(e) => updateNestedState('insured', 'jobContent', e.target.value)} rows={2} className="w-full p-3 border rounded-xl" placeholder="工作內容" />
+                   <textarea value={formData.insured.medicalHistory} onChange={(e) => updateNestedState('insured', 'medicalHistory', e.target.value)} rows={3} className="w-full p-3 border rounded-xl text-sm" placeholder="病史備註 (若曾住院5天以上或持續看診，請註明醫院、病名、發現時間、現況及用藥)" />
+                </div>
+              )}
+
+              {step === 2 && (
+                <div className="space-y-5 animate-in fade-in">
+                  <div className="flex flex-col gap-4 mb-6">
+                    <div className="flex items-center gap-2 text-blue-800 font-black text-lg"><Users className="text-blue-600"/> 2. 要保人資料</div>
+                    <button onClick={handleCopyInsuredToProposer} className={`w-full py-4 rounded-xl font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 h-14 ${formData.sameAsInsured ? 'bg-green-600 text-white' : 'bg-orange-500 text-white'}`}>
+                      <ArrowRightLeft className="w-5 h-5" /> 同被保險人 (一鍵帶入)
+                    </button>
+                  </div>
+                  {!formData.sameAsInsured ? (
+                    <div className="space-y-5">
+                      <div><label className="block text-xs font-bold text-gray-500 mb-1.5">與被保人關係 *</label><select value={formData.proposer.relation} onChange={(e) => updateNestedState('proposer', 'relation', e.target.value)} className="w-full p-3 border rounded-xl bg-white h-12">{relationOptions.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <input type="text" value={formData.proposer.name} onChange={(e) => updateNestedState('proposer', 'name', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl h-12" placeholder="姓名 *" />
+                        <input type="text" value={formData.proposer.id} onChange={(e) => updateNestedState('proposer', 'id', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl h-12" placeholder="身分證 *" />
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 mb-1">出生年月日 *</label>
+                            <BirthdayPicker category="proposer" data={formData.proposer} updateNestedState={updateNestedState} setFormData={setFormData} />
+                        </div>
+                        <div><label className="block text-xs font-bold text-gray-500 mb-1">電話 *</label><input type="tel" value={formData.proposer.phone} onChange={(e) => updateNestedState('proposer', 'phone', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="手機 *" /></div>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <label className="block text-sm font-bold text-gray-700">聯絡地址 *</label>
+                        <button onClick={() => updateNestedState('proposer', 'contactAddress', formData.insured.address)} className="w-full bg-orange-100 text-orange-700 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all h-12 shadow-sm">
+                          <MapPin className="w-4 h-4" /> 同被保險人通訊地址
+                        </button>
+                        <input type="text" value={formData.proposer.contactAddress} onChange={(e) => updateNestedState('proposer', 'contactAddress', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl h-12" placeholder="請輸入聯絡地址" />
+                      </div>
+
+                      <div className="space-y-2 mt-4">
+                        <label className="block text-sm font-bold text-gray-700">收費地址 *</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button onClick={() => updateNestedState('proposer', 'billingAddress', formData.insured.address)} className="bg-orange-100 text-orange-700 py-3 rounded-xl font-bold text-[11px] flex items-center justify-center gap-1 active:scale-95 transition-all h-12 shadow-sm">
+                            同被保人
+                          </button>
+                          <button onClick={() => updateNestedState('proposer', 'billingAddress', formData.proposer.contactAddress)} className="bg-blue-100 text-blue-700 py-3 rounded-xl font-bold text-[11px] flex items-center justify-center gap-1 active:scale-95 transition-all h-12 shadow-sm">
+                            同要保人
+                          </button>
+                        </div>
+                        <input type="text" value={formData.proposer.billingAddress} onChange={(e) => updateNestedState('proposer', 'billingAddress', e.target.value)} className="w-full p-3 border border-gray-200 rounded-xl h-12" placeholder="請輸入收費地址" />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 pt-2">
+                        <input type="text" value={formData.proposer.workPlace} onChange={(e) => updateNestedState('proposer', 'workPlace', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="公司/學校" />
+                        <input type="text" value={formData.proposer.jobTitle} onChange={(e) => updateNestedState('proposer', 'jobTitle', e.target.value)} className="w-full p-3 border rounded-xl h-12" placeholder="職稱" />
+                      </div>
+                      <textarea value={formData.proposer.jobContent} onChange={(e) => updateNestedState('proposer', 'jobContent', e.target.value)} rows={2} className="w-full p-3 border rounded-xl" placeholder="工作內容" />
+                    </div>
+                  ) : <div className="py-24 text-center bg-blue-50 rounded-3xl border-2 border-dashed border-blue-200 font-bold text-blue-700">資料已同步為本人</div>}
+                </div>
+              )}
+
+              {step === 3 && (
+                <FinancialForm 
+                  title="3. 被保人財務" 
+                  category="financialInsured" 
+                  data={formData.financialInsured} 
+                  defaultAddress={formData.insured.address} 
+                  updateNestedState={updateNestedState}
+                  handleNumericChange={handleNumericChange}
+                />
+              )}
+              {step === 4 && (
+                <FinancialForm 
+                  title="4. 要保人財務" 
+                  category="financialProposer" 
+                  data={formData.financialProposer} 
+                  defaultAddress={formData.proposer.contactAddress} 
+                  updateNestedState={updateNestedState}
+                  handleNumericChange={handleNumericChange}
+                  onSync={() => setFormData(prev => ({...prev, financialProposer: {...prev.financialInsured, sameAsInsured: !prev.financialProposer.sameAsInsured}}))} 
+                />
+              )}
+
+              {step === 5 && (
+                <div className="space-y-6 animate-in fade-in">
+                  <div className="flex items-center gap-2 mb-4 text-blue-800 font-black text-lg"><Users className="text-blue-600"/> 5. 受益人資訊</div>
+                  {formData.beneficiaries.map((b, idx) => (
+                    <div key={idx} className="p-4 border border-blue-100 rounded-2xl bg-blue-50/30 space-y-3">
+                      <div className="flex justify-between items-center h-10">
+                        <div className="flex items-center gap-2">
+                           <span className="text-xs font-bold text-blue-600">指定順位:</span>
+                           <select 
+                             value={b.rank} 
+                             onChange={(e) => { const n = [...formData.beneficiaries]; n[idx].rank = e.target.value; setFormData(prev => ({...prev, beneficiaries: n})) }}
+                             className="border rounded px-2 py-1 text-sm bg-white font-bold"
+                           >
+                             {[1,2,3,4,5,6,7,8,9].map(num => <option key={num} value={num.toString()}>{num}</option>)}
+                           </select>
+                        </div>
+                        {idx > 0 && <button onClick={() => setFormData(prev => ({...prev, beneficiaries: prev.beneficiaries.filter((_, i) => i !== idx)}))} className="text-red-500 underline text-xs font-bold px-2 hover:text-red-600 transition-colors">移除</button>}
+                      </div>
+                      <input type="text" value={b.name} onChange={(e) => { const n = [...formData.beneficiaries]; n[idx].name = e.target.value; setFormData(prev => ({...prev, beneficiaries: n})) }} className="w-full p-2.5 border rounded-xl h-12" placeholder="姓名 *" />
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div>
+                            <label className="block text-[10px] font-bold text-gray-400">生日</label>
+                            <BirthdayPicker category="beneficiary" data={b} updateNestedState={updateNestedState} setFormData={setFormData} beneficiaries={formData.beneficiaries} idx={idx} />
+                        </div>
+                        <div><label className="block text-[10px] font-bold text-gray-400">身分證</label><input type="text" value={b.id} onChange={(e) => { const n = [...formData.beneficiaries]; n[idx].id = e.target.value; setFormData(prev => ({...prev, beneficiaries: n})) }} className="w-full p-2.5 border rounded-xl h-12" /></div>
+                      </div>
+                      <select value={b.relation} onChange={(e) => { const n = [...formData.beneficiaries]; n[idx].relation = e.target.value; setFormData(prev => ({...prev, beneficiaries: n})) }} className="w-full p-2.5 border rounded-xl text-sm bg-white h-12">{relationOptions.filter(r=>r!=='本人').map(r => <option key={r} value={r}>{r}</option>)}</select>
+                    </div>
+                  ))}
+                  <button onClick={() => setFormData(prev => ({...prev, beneficiaries: [...prev.beneficiaries, {rank: (prev.beneficiaries.length+1).toString(), name:'', id:'', birthdayY:'1990', birthdayM:'1', birthdayD:'1', relation: '子女'}]}))} className="w-full py-4 border-2 border-dashed border-gray-200 rounded-xl text-gray-400 font-bold hover:bg-gray-50 h-14 transition-colors">+ 新增受益人</button>
+                  <div className="p-4 border-2 border-gray-100 rounded-2xl bg-gray-50 flex justify-between items-center"><span className="text-xs font-bold text-gray-400">最終順位</span><span className="text-sm font-black text-gray-600">法定繼承人</span></div>
+                </div>
+              )}
+
+              {step === 6 && (
+                <div className="space-y-6 animate-in fade-in">
+                  <div className="flex items-center gap-2 mb-4 text-blue-800 font-black text-lg"><CreditCard className="text-blue-600"/> 6. 繳費資訊</div>
+                  <div className="flex gap-2">
+                    {['銀行轉帳', '信用卡支付'].map(m => (<button key={m} onClick={() => setFormData(prev => ({...prev, paymentMethod: m}))} className={`flex-1 py-4 rounded-xl font-black transition-all h-14 ${formData.paymentMethod === m ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400'}`}>{m}</button>))}
+                  </div>
+                  {formData.paymentMethod === '銀行轉帳' ? (
+                    <div className="space-y-3">
+                      <input type="text" value={formData.bankInfo} onChange={(e) => setFormData(prev => ({...prev, bankInfo: e.target.value}))} className="w-full p-3 border rounded-xl h-12" placeholder="扣款銀行/分行 (例如：富邦銀行 / 民生分行)" />
+                      <input type="text" value={formData.bankAccount} onChange={(e) => setFormData(prev => ({...prev, bankAccount: e.target.value}))} className="w-full p-3 border rounded-xl h-12" placeholder="扣款帳號" />
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-4 gap-2">
+                        {[0,1,2,3].map(i => <input key={i} ref={cardRefs[i]} type="tel" maxLength="4" value={formData.cardNumbers[i]} onChange={(e) => handleCardNumberChange(i, e.target.value)} className="w-full p-3 border rounded-xl text-center font-black focus:ring-4 focus:ring-blue-50 outline-none h-12 shadow-sm" placeholder="0000" />)}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="w-24">
+                          <label className="block text-[10px] text-gray-400 font-bold mb-1">月份 (MM)</label>
+                          <input ref={expiryMMRef} type="tel" maxLength="2" value={formData.cardExpiryMM} onChange={(e) => handleExpiryChange('cardExpiryMM', e.target.value)} className="w-full p-3 border rounded-xl text-center font-black h-12 shadow-sm" placeholder="01" />
+                        </div>
+                        <span className="font-bold text-gray-300 mt-5">/</span>
+                        <div className="w-24">
+                          <label className="block text-[10px] text-gray-400 font-bold mb-1">年份 (YY)</label>
+                          <input ref={expiryYYRef} type="tel" maxLength="2" value={formData.cardExpiryYY} onChange={(e) => handleExpiryChange('cardExpiryYY', e.target.value)} className="w-full p-3 border rounded-xl text-center font-black h-12 shadow-sm" placeholder="28" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {step === 7 && (
+                <div className="space-y-6 text-center animate-in fade-in">
+                  <div className="bg-gradient-to-br from-blue-800 to-blue-900 p-8 rounded-3xl text-white shadow-xl relative overflow-hidden">
+                    <div className="relative z-10">
+                      <p className="font-black text-xl mb-4 text-white">富邦卡友專屬優惠</p>
+                      <p className="text-sm opacity-90 text-blue-50 leading-relaxed">指定險種 1% 折扣<br />單筆保費滿 5 萬享 12 期 0 利率</p>
+                    </div>
+                    <CreditCard className="absolute -right-8 -bottom-8 w-40 h-40 text-white/10 rotate-12" />
+                  </div>
+                  <p className="font-black text-gray-700 mt-6 text-lg">是否順便辦理新信用卡？</p>
+                  <div className="flex justify-center gap-10 mt-4 h-16 items-center">
+                    {['是', '否'].map(c => <label key={c} className="flex flex-col items-center gap-2 cursor-pointer group"><input type="radio" checked={formData.needNewCard === c} onChange={() => setFormData(prev => ({...prev, needNewCard: c}))} className="w-7 h-7 text-blue-600 focus:ring-blue-500" /><span className={`font-black text-lg ${formData.needNewCard === c ? 'text-blue-600 scale-125' : 'text-gray-300'} transition-all`}>{c}</span></label>)}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-12 flex gap-4">
+                {step > 1 && <button onClick={() => setStep(step - 1)} className="flex-1 border-2 p-4 rounded-2xl font-black text-gray-400 hover:bg-gray-50 transition-colors h-14">上一步</button>}
+                <button 
+                  onClick={() => step < 7 ? setStep(step + 1) : handleSubmit()} 
+                  disabled={loading || !isStepValid()} 
+                  className={`flex-[2] text-white p-4 rounded-2xl font-black shadow-xl transition-all active:scale-95 h-14 flex items-center justify-center gap-2 ${!isStepValid() ? 'bg-gray-300 cursor-not-allowed shadow-none' : 'bg-blue-600 hover:bg-blue-700'}`}
+                >
+                  {loading ? '處理中...' : (step < 7 ? (isStepValid() ? '下一步' : '請填完必填項目') : '確認送出資料')}
+                </button>
+              </div>
+              {message && <p className="text-red-500 text-center mt-6 text-sm font-black animate-bounce">{message}</p>}
+            </div>
+          </>
+        ) : (
+          <div className="bg-white rounded-2xl shadow-md p-6 animate-in fade-in zoom-in duration-300">
+            <div className="flex justify-between items-center mb-8 border-b pb-4">
+              <h2 className="text-xl font-black text-gray-800 flex items-center gap-2"><Database className="text-blue-600" /> 管理後台</h2>
+              <div className="flex gap-2">
+                <button onClick={exportToCSV} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md hover:bg-green-700 transition-colors"><FileSpreadsheet className="w-4 h-4" /> 匯出 CSV</button>
+                <button onClick={() => setShowAdmin(false)} className="text-gray-500 font-bold bg-gray-100 px-4 py-2 rounded-xl text-sm hover:bg-gray-200">離開</button>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {submissions.length === 0 ? <p className="text-center py-20 text-gray-400 font-medium">目前尚無提交資料。</p> : 
+                submissions.map(sub => (
+                  <div key={sub.id} className="border-b border-gray-100 py-4 hover:bg-gray-50 transition-colors px-2 rounded-lg">
+                    <div className="flex justify-between items-center">
+                        <p className="font-black text-gray-800">{sub.insured.name} <span className="text-xs font-normal text-gray-400 ml-2">{new Date(sub.submittedAt).toLocaleString()}</span></p>
+                        <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">{sub.paymentMethod}</span>
+                    </div>
+                    <details className="mt-2"><summary className="text-xs text-blue-500 cursor-pointer font-bold">點此查看完整資料 JSON</summary><pre className="text-[10px] bg-gray-900 text-blue-300 p-4 mt-2 rounded-xl overflow-auto shadow-inner">{JSON.stringify(sub, null, 2)}</pre></details>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+        )}
+      </main>
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        input, select, textarea { font-size: 16px !important; }
+        @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+        .animate-bounce { animation: bounce 2s infinite; }
+        
+        .no-spinner::-webkit-outer-spin-button,
+        .no-spinner::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        input[type=number] {
+          -moz-appearance: textfield;
+        }
+      `}} />
+    </div>
+  );
+};
+
+export default App;
