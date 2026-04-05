@@ -5,10 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>專屬保單資料填寫系統</title>
   
-  <!-- 引入 Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- 引入 Babel 來讓瀏覽器看得懂 JSX -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   
   <style>
@@ -20,7 +18,6 @@
 <body class="bg-[#F4F6F8]">
   <div id="root"></div>
 
-  <!-- 使用 type="text/babel" 搭配 data-type="module" 來使用 ESM 模組引入 React -->
   <script type="text/babel" data-type="module">
     // 鎖定 React 版本為 18.3.1
     import React, { useState, useRef, useEffect } from 'https://esm.sh/react@18.3.1';
@@ -49,8 +46,8 @@
       
       // --- 日期與年份設定 (改為民國年) ---
       const currentYear = new Date().getFullYear();
-      const currentMinguoYear = currentYear - 1911; // 換算為民國年
-      const years = Array.from({ length: 106 }, (_, i) => currentMinguoYear - i); // 產生過去 106 年的民國年
+      const currentMinguoYear = currentYear - 1911; 
+      const years = Array.from({ length: 106 }, (_, i) => currentMinguoYear - i); 
       const months = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
       const days = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
       
@@ -87,7 +84,7 @@
           { key: Date.now(), rank: '1', name: '', uid: '', birthDate: { Y: '', M: '', D: '' }, relation: '' }
         ],
         payment: {
-          payerSelection: '', // 儲存真實人名或 '其他'
+          payerSelection: '', 
           payerOtherName: '',
           method: '銀行轉帳', bankInfo: '', bankAccount: '',
           card1: '', card2: '', card3: '', card4: '',
@@ -102,7 +99,6 @@
       const proposerName = formData.sameAsInsured ? formData.insured.name : formData.proposer.name;
       const insuredName = formData.insured.name;
 
-      // 繳費授權人動態選項：絕對認名字不認身分
       const getPayerOptions = () => {
         const options = [];
         if (proposerName) {
@@ -112,7 +108,6 @@
           options.push({ id: insuredName, name: insuredName, role: '被保險人' });
         }
         
-        // 如果有繼承的付款人，且他不是當前的要保人或被保險人，才獨立顯示成「原授權人」
         if (isFamilyContinuation && inheritedPayment && inheritedPayment.payerName) {
           const pName = inheritedPayment.payerName;
           if (pName !== '其他' && pName !== proposerName && pName !== insuredName) {
@@ -224,18 +219,26 @@
               name: person.name || '',
               id: person.id || '',
               birthDate: { ...(person.birthDate || {Y:'', M:'', D:''}) },
-              phone: person.phone || prev.insured.phone,
-              email: person.email || prev.insured.email,
-              address: person.address || prev.insured.address,
-              height: person.height || prev.insured.height,
-              weight: person.weight || prev.insured.weight,
-              workPlace: person.workPlace || prev.insured.workPlace,
-              jobTitle: person.jobTitle || prev.insured.jobTitle,
-              jobContent: person.jobContent || prev.insured.jobContent
+              phone: person.phone || '', // 強制重置：若沒有該資料就清空
+              email: person.email || '',
+              address: person.address || '',
+              height: person.height || '',
+              weight: person.weight || '',
+              workPlace: person.workPlace || '',
+              jobTitle: person.jobTitle || '',
+              jobContent: person.jobContent || '',
+              medicalHistory: person.medicalHistory || ''
             }
           };
           if (person.finance) {
             newState.financialInsured = { ...person.finance };
+          } else {
+            // 強制重置：若沒有財務資料就全部歸零
+            newState.financialInsured = { 
+              income: '', liabilities: '', 
+              depositBank: '', depositAmount: '', stockAmount: '', 
+              immovableHas: '無', immovableAddr: '', immovableSize: '', immovableValue: '' 
+            };
           }
           return newState;
         });
@@ -251,17 +254,24 @@
               name: person.name || '',
               id: person.id || '',
               birthDate: { ...(person.birthDate || {Y:'', M:'', D:''}) },
-              phone: person.phone || prev.proposer.phone,
-              email: person.email || prev.proposer.email,
-              contactAddress: person.address || prev.proposer.contactAddress,
-              billingAddress: person.address || prev.proposer.billingAddress,
-              workPlace: person.workPlace || prev.proposer.workPlace,
-              jobTitle: person.jobTitle || prev.proposer.jobTitle,
-              jobContent: person.jobContent || prev.proposer.jobContent
+              phone: person.phone || '', // 強制重置：若沒有該資料就清空
+              email: person.email || '',
+              contactAddress: person.address || '',
+              billingAddress: person.address || '',
+              workPlace: person.workPlace || '',
+              jobTitle: person.jobTitle || '',
+              jobContent: person.jobContent || ''
             }
           };
           if (person.finance) {
             newState.financialProposer = { ...person.finance };
+          } else {
+            // 強制重置：若沒有財務資料就全部歸零
+            newState.financialProposer = { 
+              income: '', liabilities: '', 
+              depositBank: '', depositAmount: '', stockAmount: '', 
+              immovableHas: '無', immovableAddr: '', immovableSize: '', immovableValue: '' 
+            };
           }
           return newState;
         });
@@ -282,7 +292,6 @@
           }));
         } else {
           if (inheritedPayment) {
-            // 完全恢復原付款資訊，包含最重要的原授權人名字綁定
             setFormData(prev => ({ ...prev, payment: { ...inheritedPayment, payerSelection: inheritedPayment.payerName } }));
           }
         }
@@ -290,15 +299,12 @@
 
       // --- 處理授權人選項改變 (超智慧連動防呆) ---
       const handlePayerChange = (optId) => {
-        // 情況 A：家庭續保且有繼承付款人資訊
         if (isFamilyContinuation && inheritedPayment) {
-          // 如果點擊的是原本付錢的那個人 (完全還原)
           if (optId === inheritedPayment.payerName) {
             setFormData(prev => ({ ...prev, payment: { ...inheritedPayment, payerSelection: optId } }));
-            setChangePayment(false); // 自動跳回「沿用」
+            setChangePayment(false); 
             return;
           } 
-          // 如果點擊了其他人，且原本是「沿用」狀態
           else if (!changePayment) {
             setFormData(prev => ({
               ...prev,
@@ -310,14 +316,13 @@
                 cardExpiryMM: '01', cardExpiryYY: String(currentYY)
               }
             }));
-            setChangePayment(true); // 自動跳成「重填」
-            setHighlightToggle(true); // 觸發紅橘色防呆警示
+            setChangePayment(true); 
+            setHighlightToggle(true); 
             setTimeout(() => setHighlightToggle(false), 2500);
             return;
           }
         }
 
-        // 情況 B：正常切換人名 (非續保，或是已經在重填狀態下單純換按鈕)
         setFormData(prev => ({
           ...prev,
           payment: { ...prev.payment, payerSelection: optId }
@@ -346,6 +351,7 @@
             workPlace: p.workPlace || '',
             jobTitle: p.jobTitle || '',
             jobContent: p.jobContent || '',
+            medicalHistory: p.medicalHistory || '',
             finance: f ? { ...f } : null
           };
         };
@@ -356,7 +362,6 @@
           ...formData.beneficiaries.map(b => extractPerson(b, null))
         ].filter(Boolean);
 
-        // 進行「資料融合」，避免被空白資訊(例如受益人)洗掉豐富資訊
         const newDirMap = new Map(familyDirectory.map(p => [p.id, p]));
         peopleToAdd.forEach(p => {
           if (newDirMap.has(p.id)) {
@@ -364,7 +369,6 @@
             newDirMap.set(p.id, {
               ...existing,
               ...p,
-              // 優先保留已有資料，防止被空白覆蓋
               phone: p.phone || existing.phone,
               email: p.email || existing.email,
               address: p.address || existing.address,
@@ -373,6 +377,7 @@
               workPlace: p.workPlace || existing.workPlace,
               jobTitle: p.jobTitle || existing.jobTitle,
               jobContent: p.jobContent || existing.jobContent,
+              medicalHistory: p.medicalHistory || existing.medicalHistory,
               finance: p.finance || existing.finance
             });
           } else {
@@ -399,7 +404,7 @@
         const paymentToKeep = {
           ...formData.payment,
           payerName: prevPayerName, 
-          payerSelection: prevPayerName, // 精準鎖定姓名
+          payerSelection: prevPayerName, 
           payerOtherName: ''
         };
 
