@@ -28,7 +28,6 @@
     import { User, FileText, DollarSign, Users, CreditCard, CheckCircle, AlertCircle, ChevronRight, ChevronLeft, Plus, Trash2, Gift, Send, ShieldCheck, UsersRound, FilePlus2, Info } from 'https://esm.sh/lucide-react@0.378.0?deps=react@18.3.1';
 
     const App = () => {
-      // 您的 GAS 網址
       const scriptUrl = "https://script.google.com/macros/s/AKfycbxDWZQen5xtW0IbTb7B_QJRi96Ho-6fJPPln2M2snQhgTV33b2k0pOEizMV7q-xGW5i/exec";
 
       const [isSubmitting, setIsSubmitting] = useState(false);
@@ -39,20 +38,28 @@
       const [hasAgreed, setHasAgreed] = useState(false);
       const [isFamilyContinuation, setIsFamilyContinuation] = useState(false); 
       
-      // 家庭通訊錄與付款記憶狀態
+      // 家庭通訊錄、過濾與付款記憶狀態
       const [familyDirectory, setFamilyDirectory] = useState([]);
+      const [pastInsuredIds, setPastInsuredIds] = useState([]); 
       const [inheritedPayment, setInheritedPayment] = useState(null);
       const [changePayment, setChangePayment] = useState(false);
+      const [highlightToggle, setHighlightToggle] = useState(false); 
 
-      // 參數設定
       const totalSteps = 6;
+      
+      // --- 日期與年份設定 (改為民國年) ---
       const currentYear = new Date().getFullYear();
-      const years = Array.from({ length: 106 }, (_, i) => currentYear - i);
+      const currentMinguoYear = currentYear - 1911; // 換算為民國年
+      const years = Array.from({ length: 106 }, (_, i) => currentMinguoYear - i); // 產生過去 106 年的民國年
       const months = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
       const days = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
+      
+      // 信用卡西元年份產生 (維持西元，動態產生)
+      const currentYY = currentYear % 100;
+      const creditCardYears = Array.from({length: 15}, (_, i) => String(currentYY + i));
+
       const financeOptions = ['無', '0~50萬', '50~100萬', '100~200萬', '200~300萬', '300~500萬', '500萬以上'];
 
-      // 表單狀態
       const [formData, setFormData] = useState({
         consent: false,
         insured: {
@@ -62,7 +69,7 @@
         },
         sameAsInsured: true,
         proposer: {
-          name: '', id: '', birthDate: { Y: '', M: '', D: '' }, phone: '',
+          name: '', id: '', birthDate: { Y: '', M: '', D: '' }, phone: '', email: '',
           contactAddress: '', billingAddress: '', workPlace: '',
           jobTitle: '', jobContent: '', relation: '配偶'
         },
@@ -80,24 +87,43 @@
           { key: Date.now(), rank: '1', name: '', uid: '', birthDate: { Y: '', M: '', D: '' }, relation: '' }
         ],
         payment: {
-          payerType: '要保人', payerName: '',
+          payerSelection: '', // 儲存真實人名或 '其他'
+          payerOtherName: '',
           method: '銀行轉帳', bankInfo: '', bankAccount: '',
           card1: '', card2: '', card3: '', card4: '',
-          cardExpiryMM: '01', cardExpiryYY: '26'
+          cardExpiryMM: '01', cardExpiryYY: String(currentYY)
         },
         needNewCard: '否'
       });
 
       // ==========================================
-      // 衍生變數 (移到頂端，避免 ReferenceError)
+      // 衍生變數 (動態選項與通訊錄)
       // ==========================================
       const proposerName = formData.sameAsInsured ? formData.insured.name : formData.proposer.name;
       const insuredName = formData.insured.name;
-      const payerOptions = [
-        { type: '要保人', label: `要保人${proposerName ? ' → ' + proposerName : ''}` },
-        { type: '被保險人', label: `被保險人${insuredName ? ' → ' + insuredName : ''}` },
-        { type: '其他', label: '其他' }
-      ];
+
+      // 繳費授權人動態選項：絕對認名字不認身分
+      const getPayerOptions = () => {
+        const options = [];
+        if (proposerName) {
+          options.push({ id: proposerName, name: proposerName, role: '要保人' });
+        }
+        if (!formData.sameAsInsured && insuredName && insuredName !== proposerName) {
+          options.push({ id: insuredName, name: insuredName, role: '被保險人' });
+        }
+        
+        // 如果有繼承的付款人，且他不是當前的要保人或被保險人，才獨立顯示成「原授權人」
+        if (isFamilyContinuation && inheritedPayment && inheritedPayment.payerName) {
+          const pName = inheritedPayment.payerName;
+          if (pName !== '其他' && pName !== proposerName && pName !== insuredName) {
+            options.push({ id: pName, name: pName, role: '原授權人' });
+          }
+        }
+        
+        options.push({ id: '其他', name: '其他', role: '' });
+        return options;
+      };
+      const payerOptions = getPayerOptions();
 
       const getQuickFillOptions = () => {
         const options = [];
@@ -117,15 +143,26 @@
 
       const getInsuredQuickOptions = () => {
         const options = [];
-        const proposerId = formData.proposer.id;
         familyDirectory.forEach(person => {
-          if (person.id !== proposerId) {
+          if (!pastInsuredIds.includes(person.id)) {
             options.push(person);
           }
         });
         return options;
       };
       const insuredQuickOptions = getInsuredQuickOptions();
+
+      const getProposerQuickOptions = () => {
+        const options = [];
+        const currentInsuredId = formData.insured.id;
+        familyDirectory.forEach(person => {
+          if (person.id !== currentInsuredId) {
+            options.push(person);
+          }
+        });
+        return options;
+      };
+      const proposerQuickOptions = getProposerQuickOptions();
 
       // ==========================================
       // 處理函數
@@ -179,51 +216,122 @@
 
       const fillInsuredWithPerson = (person) => {
         if (!person) return;
-        setFormData(prev => ({
-          ...prev,
-          insured: {
-            ...prev.insured,
-            name: person.name || '',
-            id: person.id || '',
-            birthDate: { ...(person.birthDate || {Y:'', M:'', D:''}) },
-            phone: person.phone || prev.insured.phone,
-            email: person.email || prev.insured.email,
-            address: person.address || prev.insured.address,
-            height: person.height || prev.insured.height,
-            weight: person.weight || prev.insured.weight,
-            workPlace: person.workPlace || prev.insured.workPlace,
-            jobTitle: person.jobTitle || prev.insured.jobTitle,
-            jobContent: person.jobContent || prev.insured.jobContent
+        setFormData(prev => {
+          const newState = {
+            ...prev,
+            insured: {
+              ...prev.insured,
+              name: person.name || '',
+              id: person.id || '',
+              birthDate: { ...(person.birthDate || {Y:'', M:'', D:''}) },
+              phone: person.phone || prev.insured.phone,
+              email: person.email || prev.insured.email,
+              address: person.address || prev.insured.address,
+              height: person.height || prev.insured.height,
+              weight: person.weight || prev.insured.weight,
+              workPlace: person.workPlace || prev.insured.workPlace,
+              jobTitle: person.jobTitle || prev.insured.jobTitle,
+              jobContent: person.jobContent || prev.insured.jobContent
+            }
+          };
+          if (person.finance) {
+            newState.financialInsured = { ...person.finance };
           }
-        }));
+          return newState;
+        });
+      };
+
+      const fillProposerWithPerson = (person) => {
+        if (!person) return;
+        setFormData(prev => {
+          const newState = {
+            ...prev,
+            proposer: {
+              ...prev.proposer,
+              name: person.name || '',
+              id: person.id || '',
+              birthDate: { ...(person.birthDate || {Y:'', M:'', D:''}) },
+              phone: person.phone || prev.proposer.phone,
+              email: person.email || prev.proposer.email,
+              contactAddress: person.address || prev.proposer.contactAddress,
+              billingAddress: person.address || prev.proposer.billingAddress,
+              workPlace: person.workPlace || prev.proposer.workPlace,
+              jobTitle: person.jobTitle || prev.proposer.jobTitle,
+              jobContent: person.jobContent || prev.proposer.jobContent
+            }
+          };
+          if (person.finance) {
+            newState.financialProposer = { ...person.finance };
+          }
+          return newState;
+        });
       };
 
       // --- 繳費變更 Y/N 橫桿切換邏輯 ---
       const handlePaymentToggle = (isChanging) => {
         setChangePayment(isChanging);
         if (isChanging) {
-          // 清空付款資料
           setFormData(prev => ({
             ...prev,
             payment: {
-              payerType: '要保人', payerName: '',
+              ...prev.payment,
               method: '銀行轉帳', bankInfo: '', bankAccount: '',
               card1: '', card2: '', card3: '', card4: '',
-              cardExpiryMM: '01', cardExpiryYY: '26'
+              cardExpiryMM: '01', cardExpiryYY: String(currentYY)
             }
           }));
         } else {
-          // 恢復沿用的付款資料
           if (inheritedPayment) {
-            setFormData(prev => ({ ...prev, payment: inheritedPayment }));
+            // 完全恢復原付款資訊，包含最重要的原授權人名字綁定
+            setFormData(prev => ({ ...prev, payment: { ...inheritedPayment, payerSelection: inheritedPayment.payerName } }));
           }
         }
       };
 
-      // --- 家庭記憶接續填寫邏輯與通訊錄收集 ---
+      // --- 處理授權人選項改變 (超智慧連動防呆) ---
+      const handlePayerChange = (optId) => {
+        // 情況 A：家庭續保且有繼承付款人資訊
+        if (isFamilyContinuation && inheritedPayment) {
+          // 如果點擊的是原本付錢的那個人 (完全還原)
+          if (optId === inheritedPayment.payerName) {
+            setFormData(prev => ({ ...prev, payment: { ...inheritedPayment, payerSelection: optId } }));
+            setChangePayment(false); // 自動跳回「沿用」
+            return;
+          } 
+          // 如果點擊了其他人，且原本是「沿用」狀態
+          else if (!changePayment) {
+            setFormData(prev => ({
+              ...prev,
+              payment: {
+                ...prev.payment,
+                payerSelection: optId,
+                method: '銀行轉帳', bankInfo: '', bankAccount: '',
+                card1: '', card2: '', card3: '', card4: '',
+                cardExpiryMM: '01', cardExpiryYY: String(currentYY)
+              }
+            }));
+            setChangePayment(true); // 自動跳成「重填」
+            setHighlightToggle(true); // 觸發紅橘色防呆警示
+            setTimeout(() => setHighlightToggle(false), 2500);
+            return;
+          }
+        }
+
+        // 情況 B：正常切換人名 (非續保，或是已經在重填狀態下單純換按鈕)
+        setFormData(prev => ({
+          ...prev,
+          payment: { ...prev.payment, payerSelection: optId }
+        }));
+      };
+
+      // --- 家庭記憶接續填寫邏輯與「資料融合」通訊錄收集 ---
       const handleNextFamilyMember = () => {
-        // 1. 準備通訊錄
-        const extractPerson = (p) => {
+        const currentInsuredId = formData.insured.id;
+        if (currentInsuredId && !pastInsuredIds.includes(currentInsuredId)) {
+          setPastInsuredIds(prev => [...prev, currentInsuredId]);
+        }
+
+        const extractPerson = (p, f) => {
           const personId = p?.id || p?.uid;
           if (!p?.name || !personId) return null;
           return { 
@@ -237,21 +345,42 @@
             weight: p.weight || '',
             workPlace: p.workPlace || '',
             jobTitle: p.jobTitle || '',
-            jobContent: p.jobContent || ''
+            jobContent: p.jobContent || '',
+            finance: f ? { ...f } : null
           };
         };
 
         const peopleToAdd = [
-          extractPerson(formData.sameAsInsured ? formData.insured : formData.proposer),
-          extractPerson(formData.insured),
-          ...formData.beneficiaries.map(extractPerson)
+          extractPerson(formData.sameAsInsured ? formData.insured : formData.proposer, formData.sameAsInsured ? formData.financialInsured : formData.financialProposer),
+          extractPerson(formData.insured, formData.financialInsured),
+          ...formData.beneficiaries.map(b => extractPerson(b, null))
         ].filter(Boolean);
 
+        // 進行「資料融合」，避免被空白資訊(例如受益人)洗掉豐富資訊
         const newDirMap = new Map(familyDirectory.map(p => [p.id, p]));
-        peopleToAdd.forEach(p => newDirMap.set(p.id, p));
+        peopleToAdd.forEach(p => {
+          if (newDirMap.has(p.id)) {
+            const existing = newDirMap.get(p.id);
+            newDirMap.set(p.id, {
+              ...existing,
+              ...p,
+              // 優先保留已有資料，防止被空白覆蓋
+              phone: p.phone || existing.phone,
+              email: p.email || existing.email,
+              address: p.address || existing.address,
+              height: p.height || existing.height,
+              weight: p.weight || existing.weight,
+              workPlace: p.workPlace || existing.workPlace,
+              jobTitle: p.jobTitle || existing.jobTitle,
+              jobContent: p.jobContent || existing.jobContent,
+              finance: p.finance || existing.finance
+            });
+          } else {
+            newDirMap.set(p.id, p);
+          }
+        });
         setFamilyDirectory(Array.from(newDirMap.values()));
 
-        // 2. 保留要保人與財務資訊
         const proposerDataToKeep = formData.sameAsInsured ? {
           ...formData.insured,
           contactAddress: formData.insured.address,
@@ -263,8 +392,18 @@
           ...formData.financialInsured
         } : formData.financialProposer;
 
-        // 3. 記憶付款資訊，供沿用/變更切換使用
-        setInheritedPayment(formData.payment);
+        let prevPayerName = '';
+        if (formData.payment.payerSelection === '其他') prevPayerName = formData.payment.payerOtherName;
+        else prevPayerName = formData.payment.payerSelection; 
+
+        const paymentToKeep = {
+          ...formData.payment,
+          payerName: prevPayerName, 
+          payerSelection: prevPayerName, // 精準鎖定姓名
+          payerOtherName: ''
+        };
+
+        setInheritedPayment(paymentToKeep);
         setChangePayment(false);
 
         setFormData(prev => ({
@@ -272,6 +411,7 @@
           sameAsInsured: false, 
           proposer: proposerDataToKeep, 
           financialProposer: financialProposerToKeep, 
+          payment: paymentToKeep,
           insured: {
             name: '', id: '', birthDate: { Y: '', M: '', D: '' }, phone: '', email: '',
             height: '', weight: '', address: '', workPlace: '',
@@ -321,6 +461,10 @@
         setIsSubmitting(true);
         setSubmitStatus(null);
 
+        let finalPayerName = '';
+        if (formData.payment.payerSelection === '其他') finalPayerName = formData.payment.payerOtherName;
+        else finalPayerName = formData.payment.payerSelection;
+
         try {
           const payload = {
             insured: {
@@ -362,7 +506,9 @@
               rank: b.rank, name: b.name, id: b.uid, relation: b.relation,
               birthdayY: b?.birthDate?.Y || '', birthdayM: b?.birthDate?.M || '', birthdayD: b?.birthDate?.D || ''
             })),
-            payer: formData.payment.payerType === '其他' ? formData.payment.payerName : formData.payment.payerType,
+            
+            payer: finalPayerName,
+            
             paymentMethod: formData.payment.method, bankInfo: formData.payment.bankInfo, bankAccount: formData.payment.bankAccount,
             cardNumbers: [formData.payment.card1, formData.payment.card2, formData.payment.card3, formData.payment.card4],
             cardExpiryMM: formData.payment.cardExpiryMM, cardExpiryYY: formData.payment.cardExpiryYY,
@@ -424,7 +570,8 @@
         return (
           <div className="flex gap-2">
             <select required className={`${baseInputClass} flex-1 px-2 font-medium`} value={data.Y} onChange={e => handleDateChange(section, 'Y', e.target.value, index)}>
-              <option value="" disabled>年</option>{years.map(y => <option key={y} value={y}>{y}</option>)}
+              <option value="" disabled>民國年</option>
+              {years.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
             <select required className={`${baseInputClass} flex-1 px-2 font-medium`} value={data.M} onChange={e => handleDateChange(section, 'M', e.target.value, index)}>
               <option value="" disabled>月</option>{months.map(m => <option key={m} value={m}>{m}</option>)}
@@ -498,7 +645,7 @@
               )}
             </div>
 
-            {/* --- 成功送出畫面：加入「家庭接續填寫」邏輯 --- */}
+            {/* --- 成功送出畫面 --- */}
             {submitStatus === 'success' && (
               <div className="bg-white rounded-[2rem] shadow-xl shadow-green-100/50 p-8 sm:p-10 text-center border border-green-50 animate-in fade-in slide-in-from-bottom-4 duration-700">
                 <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -547,7 +694,6 @@
                     
                     <div className="space-y-6">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 sm:gap-6">
-                        {/* 姓名輸入框與帶入按鈕對齊處理 */}
                         <div className="flex flex-col justify-end">
                           <div className="flex flex-wrap items-end justify-between gap-2 mb-2 min-h-[28px]">
                             <label className="block text-sm font-bold text-gray-700 ml-1 whitespace-nowrap">姓名 <span className="text-red-500">*</span></label>
@@ -568,7 +714,6 @@
                           </div>
                           <input required type="text" className={`${baseInputClass} mt-auto`} value={formData.insured.name} onChange={e => handleChange('insured', 'name', e.target.value)} />
                         </div>
-                        {/* 身分證輸入框 */}
                         <div className="flex flex-col justify-end">
                           <div className="flex flex-wrap items-end justify-between gap-2 mb-2 min-h-[28px]">
                             <InputLabel required className="mb-0">身分證字號</InputLabel>
@@ -576,7 +721,6 @@
                           <input required type="text" className={`${baseInputClass} uppercase font-medium mt-auto`} value={formData.insured.id} onChange={e => handleChange('insured', 'id', e.target.value)} />
                         </div>
                       </div>
-                      
                       <div><InputLabel required className="mb-2">出生年月日</InputLabel><DateSelector section="insured" /></div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                         <div><InputLabel required className="mb-2">手機號碼</InputLabel><input required type="tel" className={`${baseInputClass} font-medium`} value={formData.insured.phone} onChange={e => handleChange('insured', 'phone', e.target.value)} /></div>
@@ -618,10 +762,35 @@
 
                     {!formData.sameAsInsured && (
                       <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-500">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                          <div><InputLabel required className="mb-2">姓名</InputLabel><input required={!formData.sameAsInsured} type="text" className={baseInputClass} value={formData.proposer.name} onChange={e => handleChange('proposer', 'name', e.target.value)} /></div>
-                          <div><InputLabel required className="mb-2">身分證字號</InputLabel><input required={!formData.sameAsInsured} type="text" className={`${baseInputClass} uppercase font-medium`} value={formData.proposer.id} onChange={e => handleChange('proposer', 'id', e.target.value)} /></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 sm:gap-6">
+                          <div className="flex flex-col justify-end">
+                            <div className="flex flex-wrap items-end justify-between gap-2 mb-2 min-h-[28px]">
+                              <label className="block text-sm font-bold text-gray-700 ml-1 whitespace-nowrap">姓名 <span className="text-red-500">*</span></label>
+                              {isFamilyContinuation && proposerQuickOptions.length > 0 && (
+                                <div className="flex flex-wrap justify-end gap-1.5">
+                                  {proposerQuickOptions.map(opt => (
+                                    <button 
+                                      key={opt.id} 
+                                      type="button" 
+                                      onClick={() => fillProposerWithPerson(opt)} 
+                                      className="text-[11px] sm:text-xs bg-indigo-100 text-indigo-800 hover:bg-indigo-200 px-2.5 py-1.5 sm:py-1 rounded-full font-black transition-all shadow-sm active:scale-95 border border-indigo-200"
+                                    >
+                                      ⚡ {opt.name}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <input required={!formData.sameAsInsured} type="text" className={`${baseInputClass} mt-auto`} value={formData.proposer.name} onChange={e => handleChange('proposer', 'name', e.target.value)} />
+                          </div>
+                          <div className="flex flex-col justify-end">
+                            <div className="flex flex-wrap items-end justify-between gap-2 mb-2 min-h-[28px]">
+                              <InputLabel required className="mb-0">身分證字號</InputLabel>
+                            </div>
+                            <input required={!formData.sameAsInsured} type="text" className={`${baseInputClass} uppercase font-medium mt-auto`} value={formData.proposer.id} onChange={e => handleChange('proposer', 'id', e.target.value)} />
+                          </div>
                         </div>
+
                         <div><InputLabel required className="mb-2">出生年月日</InputLabel><DateSelector section="proposer" /></div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                           <div><InputLabel required className="mb-2">手機號碼</InputLabel><input required={!formData.sameAsInsured} type="tel" className={`${baseInputClass} font-medium`} value={formData.proposer.phone} onChange={e => handleChange('proposer', 'phone', e.target.value)} /></div>
@@ -930,32 +1099,39 @@
                 <div className={`step-container transition-opacity duration-300 ${currentStep === 5 ? 'opacity-100 block' : 'opacity-0 hidden'}`} data-step="5">
                   <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100/80 p-6 sm:p-8">
                     
-                    {/* 家庭接續模式：沿用繳費資訊提示框 (質感升級版) */}
+                    {/* 家庭接續模式：沿用繳費資訊提示框 (含防呆橘紅光動畫) */}
                     {isFamilyContinuation && (
-                      <div className="mb-8 relative overflow-hidden bg-gradient-to-r from-blue-50 to-indigo-50/50 border border-blue-100/80 p-5 sm:p-6 rounded-[2rem] flex flex-col md:flex-row items-center justify-between gap-5 animate-in fade-in slide-in-from-top-2 shadow-sm">
+                      <div className={`mb-8 relative overflow-hidden p-5 sm:p-6 rounded-[2rem] flex flex-col md:flex-row items-center justify-between gap-5 transition-all duration-500 shadow-sm border ${
+                        highlightToggle 
+                          ? 'bg-gradient-to-r from-amber-50 to-orange-50 border-amber-300 ring-4 ring-amber-400/20 scale-[1.02]' 
+                          : 'bg-gradient-to-r from-blue-50 to-indigo-50/50 border-blue-100/80'
+                      }`}>
                         {/* 左側圖示與文字 */}
                         <div className="flex items-center gap-4 w-full md:w-auto">
-                          <div className="bg-white p-3 rounded-2xl text-blue-600 shadow-sm border border-blue-100 shrink-0">
+                          <div className={`p-3 rounded-2xl shadow-sm border shrink-0 transition-colors duration-500 ${highlightToggle ? 'bg-amber-500 text-white border-amber-600' : 'bg-white text-blue-600 border-blue-100'}`}>
                             <Info className="w-6 h-6" />
                           </div>
-                          <span className="font-bold text-blue-900 text-base sm:text-lg tracking-wide">
-                            已沿用先前的繳費資訊，是否重填？
-                          </span>
+                          <div className="flex flex-col">
+                            <span className={`font-bold text-base sm:text-lg tracking-wide transition-colors ${highlightToggle ? 'text-amber-900' : 'text-blue-900'}`}>
+                              {highlightToggle ? '已自動切換為重新填寫' : '已沿用先前的繳費資訊，是否重填？'}
+                            </span>
+                            {highlightToggle && <span className="text-sm text-amber-700 mt-1 font-medium">因變更授權扣款人，請重新填寫下方繳費資訊</span>}
+                          </div>
                         </div>
 
                         {/* 右側 iOS 風格切換按鈕 */}
-                        <div className="flex bg-blue-100/60 backdrop-blur-sm p-1.5 rounded-2xl w-full md:w-56 shadow-inner border border-blue-200/50 shrink-0">
+                        <div className={`flex backdrop-blur-sm p-1.5 rounded-2xl w-full md:w-56 shadow-inner border shrink-0 transition-colors ${highlightToggle ? 'bg-amber-100/60 border-amber-200' : 'bg-blue-100/60 border-blue-200/50'}`}>
                           <button 
                             type="button" 
                             onClick={() => handlePaymentToggle(false)} 
-                            className={`flex-1 py-2.5 text-sm sm:text-base rounded-xl transition-all duration-300 ${!changePayment ? 'bg-white text-blue-700 shadow-md font-black ring-1 ring-black/5' : 'text-blue-700/60 font-bold hover:bg-white/50'}`}
+                            className={`flex-1 py-2.5 text-sm sm:text-base rounded-xl transition-all duration-300 ${!changePayment ? `bg-white shadow-md font-black ring-1 ring-black/5 ${highlightToggle ? 'text-amber-700' : 'text-blue-700'}` : 'text-gray-500 font-bold hover:bg-white/50'}`}
                           >
                             沿用
                           </button>
                           <button 
                             type="button" 
                             onClick={() => handlePaymentToggle(true)} 
-                            className={`flex-1 py-2.5 text-sm sm:text-base rounded-xl transition-all duration-300 ${changePayment ? 'bg-white text-blue-700 shadow-md font-black ring-1 ring-black/5' : 'text-blue-700/60 font-bold hover:bg-white/50'}`}
+                            className={`flex-1 py-2.5 text-sm sm:text-base rounded-xl transition-all duration-300 ${changePayment ? `bg-white shadow-md font-black ring-1 ring-black/5 ${highlightToggle ? 'text-amber-700' : 'text-blue-700'}` : 'text-gray-500 font-bold hover:bg-white/50'}`}
                           >
                             重填
                           </button>
@@ -969,23 +1145,24 @@
                     </div>
 
                     <div className="space-y-8">
-                      {/* --- 授權扣款人選項 --- */}
+                      {/* --- 授權扣款人選項 (絕對認名字，防呆連動) --- */}
                       <div>
                         <InputLabel required className="mb-2">授權扣款人</InputLabel>
                         <div className="flex flex-col sm:flex-row gap-3 mt-3">
                           {payerOptions.map(opt => (
-                            <label key={opt.type} className={`flex-1 flex items-center p-4 rounded-2xl border-2 cursor-pointer transition-all shadow-sm active:scale-95 ${formData.payment.payerType === opt.type ? 'border-teal-500 bg-teal-50 shadow-teal-500/20 text-teal-800 font-black' : 'border-gray-200 hover:bg-gray-50 text-gray-600 font-bold'}`}>
-                              <input type="radio" className="hidden" checked={formData.payment.payerType === opt.type} onChange={() => handleChange('payment', 'payerType', opt.type)} />
-                              <div className="flex flex-col">
-                                <span>{opt.label}</span>
+                            <label key={opt.id} className={`relative flex-1 flex items-center justify-center py-3 px-2 rounded-2xl border-2 cursor-pointer transition-all shadow-sm active:scale-95 ${formData.payment.payerSelection === opt.id ? 'border-teal-500 bg-teal-50 shadow-teal-500/20 text-teal-800 font-black' : 'border-gray-200 hover:bg-gray-50 text-gray-600 font-bold'}`}>
+                              <input type="radio" required className="absolute opacity-0 w-0 h-0" checked={formData.payment.payerSelection === opt.id} onChange={() => handlePayerChange(opt.id)} />
+                              <div className="flex flex-col items-center text-center leading-tight">
+                                <span className="text-base sm:text-lg">{opt.name}</span>
+                                {opt.role && <span className="text-xs sm:text-sm mt-1 opacity-70 font-semibold">{opt.role}</span>}
                               </div>
                             </label>
                           ))}
                         </div>
-                        {formData.payment.payerType === '其他' && (
+                        {formData.payment.payerSelection === '其他' && (
                           <div className="mt-4 animate-in fade-in slide-in-from-top-2 duration-300">
                             <InputLabel required className="mb-2">請輸入授權人姓名</InputLabel>
-                            <input required type="text" placeholder="請輸入完整姓名" className={baseInputClass} value={formData.payment.payerName} onChange={e => handleChange('payment', 'payerName', e.target.value)} />
+                            <input required type="text" placeholder="請輸入完整姓名" className={baseInputClass} value={formData.payment.payerOtherName} onChange={e => handleChange('payment', 'payerOtherName', e.target.value)} />
                           </div>
                         )}
                       </div>
@@ -1032,7 +1209,7 @@
                                 </select>
                                 <span className="text-gray-300 font-black text-2xl">/</span>
                                 <select className={`${baseInputClass} bg-white flex-1 font-bold`} value={formData.payment.cardExpiryYY} onChange={e => handleChange('payment', 'cardExpiryYY', e.target.value)}>
-                                  {Array.from({length: 15}, (_, i) => String(24 + i)).map(y => <option key={y} value={y}>{y}</option>)}
+                                  {Array.from({length: 15}, (_, i) => String(currentYY + i)).map(y => <option key={y} value={y}>{y}</option>)}
                                 </select>
                               </div>
                             </div>
@@ -1077,7 +1254,7 @@
                         </div>
                       </div>
                       
-                      {/* 大面積醒目確認送出按鈕 */}
+                      {/* 大面積醒目確認送出按鈕 (Step 6 限定) */}
                       <div className="mt-8">
                         <button 
                           type="button" 
@@ -1087,7 +1264,7 @@
                             isSubmitting ? 'bg-gray-500 cursor-not-allowed opacity-80' : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 active:scale-[0.98] shadow-green-500/40 ring-4 ring-green-500/20'
                           }`}
                         >
-                          {isSubmitting ? '資料傳送中...' : <><Send className="w-6 h-6 mr-3"/> 確認無誤並送出表單</>}
+                          {isSubmitting ? '資料加密傳送中...' : <><Send className="w-6 h-6 mr-3"/> 確認無誤並送出表單</>}
                         </button>
                         <p className="text-blue-200/60 text-xs mt-4">點擊送出即代表您同意本表單之隱私聲明</p>
                       </div>
@@ -1096,7 +1273,7 @@
                   </div>
                 </div>
 
-                {/* 手機版懸浮底部導覽列 */}
+                {/* 手機版懸浮底部導覽列 (毛玻璃效果) - 當處於最後一頁時隱藏送出按鈕以防重複 */}
                 <div className={`fixed bottom-0 left-0 w-full bg-white/80 backdrop-blur-xl border-t border-gray-200/50 p-4 pb-[env(safe-area-inset-bottom,1rem)] z-50 md:relative md:bg-transparent md:backdrop-blur-none md:border-none md:p-0 md:mt-10 flex justify-between gap-3 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] md:shadow-none ${currentStep === 6 ? 'hidden md:flex' : 'flex'}`}>
                   <button 
                     type="button" 
@@ -1118,7 +1295,7 @@
                     </button>
                   ) : (
                     <div className="flex-[3] hidden md:block">
-                       {/* 電腦版佔位符 */}
+                       {/* 電腦版才顯示佔位符，因為手機版按鈕已藏 */}
                     </div>
                   )}
                 </div>
