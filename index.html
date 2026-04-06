@@ -292,6 +292,7 @@
           }));
         } else {
           if (inheritedPayment) {
+            // 完全恢復原付款資訊，包含最重要的原授權人名字綁定
             setFormData(prev => ({ ...prev, payment: { ...inheritedPayment, payerSelection: inheritedPayment.payerName } }));
           }
         }
@@ -463,6 +464,13 @@
           return;
         }
 
+        // --- 強制最後檢查：授權人是否被選擇 ---
+        if (!formData.payment.payerSelection) {
+          setCurrentStep(5);
+          setTimeout(() => alert("請選擇「授權扣款人」！"), 300);
+          return;
+        }
+
         setIsSubmitting(true);
         setSubmitStatus(null);
 
@@ -550,6 +558,15 @@
             break;
           }
         }
+
+        // --- 強制檢查授權扣款人是否已選 (雙重防呆) ---
+        if (isValid && currentStep === 5) {
+          if (!formData.payment.payerSelection) {
+            alert("請點擊選擇上方的「授權扣款人」！");
+            isValid = false;
+          }
+        }
+
         if (isValid) {
           setCurrentStep(prev => Math.min(prev + 1, totalSteps));
           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1156,7 +1173,8 @@
                         <div className="flex flex-col sm:flex-row gap-3 mt-3">
                           {payerOptions.map(opt => (
                             <label key={opt.id} className={`relative flex-1 flex items-center justify-center py-3 px-2 rounded-2xl border-2 cursor-pointer transition-all shadow-sm active:scale-95 ${formData.payment.payerSelection === opt.id ? 'border-teal-500 bg-teal-50 shadow-teal-500/20 text-teal-800 font-black' : 'border-gray-200 hover:bg-gray-50 text-gray-600 font-bold'}`}>
-                              <input type="radio" required className="absolute opacity-0 w-0 h-0" checked={formData.payment.payerSelection === opt.id} onChange={() => handlePayerChange(opt.id)} />
+                              {/* 修正為擁有 name 群組的必選按鈕 */}
+                              <input type="radio" name="payerSelection" required className="absolute w-1 h-1 opacity-0" checked={formData.payment.payerSelection === opt.id} onChange={() => handlePayerChange(opt.id)} />
                               <div className="flex flex-col items-center text-center leading-tight">
                                 <span className="text-base sm:text-lg">{opt.name}</span>
                                 {opt.role && <span className="text-xs sm:text-sm mt-1 opacity-70 font-semibold">{opt.role}</span>}
@@ -1176,11 +1194,11 @@
                         <InputLabel className="mb-2">請選擇繳費方式</InputLabel>
                         <div className="flex flex-col sm:flex-row gap-4 mt-3">
                           <label className={`flex-1 flex items-center justify-center p-5 rounded-2xl border-2 cursor-pointer transition-all shadow-sm active:scale-95 ${formData.payment.method === '銀行轉帳' ? 'border-teal-500 bg-teal-50 shadow-teal-500/20' : 'border-gray-200 hover:bg-gray-50'}`}>
-                            <input type="radio" className="w-5 h-5 text-teal-600 accent-teal-600 mr-3" checked={formData.payment.method === '銀行轉帳'} onChange={() => handleChange('payment', 'method', '銀行轉帳')} />
+                            <input type="radio" name="paymentMethod" className="w-5 h-5 text-teal-600 accent-teal-600 mr-3" checked={formData.payment.method === '銀行轉帳'} onChange={() => handleChange('payment', 'method', '銀行轉帳')} />
                             <span className={`font-black text-lg ${formData.payment.method === '銀行轉帳' ? 'text-teal-800' : 'text-gray-500'}`}>銀行轉帳</span>
                           </label>
                           <label className={`flex-1 flex items-center justify-center p-5 rounded-2xl border-2 cursor-pointer transition-all shadow-sm active:scale-95 ${formData.payment.method === '信用卡支付' ? 'border-teal-500 bg-teal-50 shadow-teal-500/20' : 'border-gray-200 hover:bg-gray-50'}`}>
-                            <input type="radio" className="w-5 h-5 text-teal-600 accent-teal-600 mr-3" checked={formData.payment.method === '信用卡支付'} onChange={() => handleChange('payment', 'method', '信用卡支付')} />
+                            <input type="radio" name="paymentMethod" className="w-5 h-5 text-teal-600 accent-teal-600 mr-3" checked={formData.payment.method === '信用卡支付'} onChange={() => handleChange('payment', 'method', '信用卡支付')} />
                             <span className={`font-black text-lg ${formData.payment.method === '信用卡支付' ? 'text-teal-800' : 'text-gray-500'}`}>信用卡支付</span>
                           </label>
                         </div>
